@@ -1,4 +1,4 @@
-import { readUserScopedStorageValue, writeUserScopedStorageValue } from './storageUtils'
+import { readUserScopedStorageValue, writeUserScopedStorageValue } from './storageUtils.js'
 
 const THEME_PREFERENCE_KEY = 'radiographer_exam_bank_theme_preference'
 export const THEME_PREFERENCES = ['auto', 'light', 'dark']
@@ -14,6 +14,7 @@ export function getThemePreference() {
 export function saveThemePreference(preference) {
   const normalizedPreference = normalizeThemePreference(preference)
   writeUserScopedStorageValue(THEME_PREFERENCE_KEY, normalizedPreference)
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event('theme-preference-change'))
   return normalizedPreference
 }
 

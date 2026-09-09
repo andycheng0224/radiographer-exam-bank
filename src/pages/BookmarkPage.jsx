@@ -1,3 +1,5 @@
+import { QuestionRichText } from '../components/QuestionContent'
+import { isAcceptedAnswer } from '../utils/quizUtils'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import BackLink from '../components/BackLink'
@@ -88,6 +90,9 @@ function BookmarkPage() {
   const [bookmarkIds, setBookmarkIds] = useState(() => getBookmarkIds())
   const [bookmarkedQuestions, setBookmarkedQuestions] = useState([])
   const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [retryCount, setRetryCount] = useState(0)
+  const [visibleCount, setVisibleCount] = useState(20)
   const [selectedSubject, setSelectedSubject] = useState(ALL_SUBJECTS_LABEL)
 
   useEffect(() => {
@@ -96,14 +101,16 @@ function BookmarkPage() {
     async function loadBookmarkedQuestions() {
       try {
         setIsLoading(true)
+        setLoadError('')
         const nextQuestions = await loadQuestionsByKeys(bookmarkIds)
 
         if (!isCancelled) {
           setBookmarkedQuestions(nextQuestions)
+          if (nextQuestions.length < bookmarkIds.length) setLoadError('部分收藏題暫時無法取得，原有收藏紀錄仍保留。')
         }
       } catch {
         if (!isCancelled) {
-          setBookmarkedQuestions([])
+          setLoadError('收藏題載入失敗，原有紀錄仍保留，請重試。')
         }
       } finally {
         if (!isCancelled) {
@@ -117,7 +124,7 @@ function BookmarkPage() {
     return () => {
       isCancelled = true
     }
-  }, [bookmarkIds])
+  }, [bookmarkIds, retryCount])
 
   const topSubjects = useMemo(() => {
     const counts = new Map()
@@ -254,7 +261,7 @@ function BookmarkPage() {
                     <button
                       key={subject}
                       type="button"
-                      onClick={() => setSelectedSubject(subject)}
+                      onClick={() => { setSelectedSubject(subject); setVisibleCount(20) }}
                       className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
                         isActive
                           ? 'border-slate-900 bg-slate-900 text-white'
@@ -270,13 +277,16 @@ function BookmarkPage() {
           </div>
 
           <div className="mt-8 grid gap-4">
+            {loadError && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              {loadError} <Button className="ml-2" variant="secondary" onClick={() => setRetryCount((value) => value + 1)}>重試載入</Button>
+            </div>}
             {isLoading && (
               <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-5 text-slate-600">
                 正在載入收藏題資料...
               </div>
             )}
 
-            {!isLoading && bookmarkedQuestions.length === 0 && (
+            {!isLoading && !loadError && bookmarkedQuestions.length === 0 && (
               <div className="rounded-[1.75rem] border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center">
                 <h3 className="text-xl font-bold text-slate-950">尚未收藏題目</h3>
                 <p className="mt-3 text-sm leading-relaxed text-slate-600">
@@ -299,7 +309,7 @@ function BookmarkPage() {
               </div>
             )}
 
-            {filteredBookmarkedQuestions.map((question) => {
+            {filteredBookmarkedQuestions.slice(0, visibleCount).map((question) => {
               const questionKey = getQuestionKey(question)
               const correctAnswer = question.correctAnswer || question.answer || ''
               const explanation = getReadableExplanation(question)
@@ -326,11 +336,11 @@ function BookmarkPage() {
                     </div>
 
                     <div className="space-y-3">
-                      <h2 className="text-xl font-bold leading-relaxed text-slate-950">{question.question}</h2>
+                      <QuestionRichText text={question.question} alt="題目附圖" textClassName="text-xl font-bold leading-relaxed text-slate-950" />
 
                       <div className="grid gap-3">
                         {Object.entries(question.options || {}).map(([optionKey, optionText]) => {
-                          const isCorrect = optionKey === correctAnswer
+                          const isCorrect = isAcceptedAnswer(correctAnswer, optionKey)
 
                           return (
                             <div
@@ -342,10 +352,10 @@ function BookmarkPage() {
                               }`}
                             >
                               <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                                <p className="text-sm leading-relaxed">
+                                <div className="min-w-0 flex-1 text-sm leading-relaxed">
                                   <span className="mr-2 font-semibold">{optionKey}.</span>
-                                  {optionText}
-                                </p>
+                                  <QuestionRichText text={optionText} alt={`選項 ${optionKey} 附圖`} imageClassName="max-h-80 w-full object-contain" />
+                                </div>
                                 {isCorrect && (
                                   <span className="rounded-full bg-white/70 px-2 py-1 text-xs font-semibold text-emerald-700">
                                     正確答案
@@ -374,9 +384,7 @@ function BookmarkPage() {
                     {explanation && (
                       <div className="rounded-[1.25rem] border border-slate-200 bg-slate-50 p-4">
                         <p className="text-sm font-semibold text-slate-900">詳解</p>
-                        <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-600">
-                          {explanation}
-                        </p>
+                        <QuestionRichText text={explanation} alt="詳解附圖" textClassName="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-600" />
                       </div>
                     )}
 
@@ -397,6 +405,9 @@ function BookmarkPage() {
                 </article>
               )
             })}
+            {filteredBookmarkedQuestions.length > visibleCount && <Button variant="secondary" onClick={() => setVisibleCount((value) => value + 20)}>
+              載入更多（已顯示 {Math.min(visibleCount, filteredBookmarkedQuestions.length)} / {filteredBookmarkedQuestions.length} 題）
+            </Button>}
           </div>
         </section>
       </div>

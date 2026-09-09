@@ -1,6 +1,6 @@
-import { EXAM_SUBJECTS } from '../constants/subjects'
-import { getQuestionKey } from './storageUtils'
-import { normalizeQuestionKey } from './subjectUtils'
+import { EXAM_SUBJECTS } from '../constants/subjects.js'
+import { getQuestionKey } from './storageUtils.js'
+import { normalizeQuestionKey, safeDecodeURIComponent } from './subjectUtils.js'
 
 const QUESTION_INDEX_PATH = '/data/question-index.json'
 const QUESTION_KEY_MAP_PATH = '/data/question-key-map.json'
@@ -30,7 +30,7 @@ function normalizeText(value) {
 }
 
 function canUseStorage() {
-  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
+  try { return typeof window !== 'undefined' && Boolean(window.localStorage) } catch { return false }
 }
 
 function readCachedQuestionIndex() {
@@ -61,6 +61,7 @@ function writeCachedQuestionIndex(index) {
 
 async function fetchJson(path) {
   const response = await fetch(path, {
+    signal: AbortSignal.timeout(15000),
     headers: {
       Accept: 'application/json',
     },
@@ -113,18 +114,14 @@ export async function getQuestionIndex() {
     memoryCache.questionIndexPromise = (async () => {
       const cachedIndex = readCachedQuestionIndex()
 
-      if (cachedIndex) {
-        memoryCache.questionIndex = cachedIndex
-      }
-
       try {
         const fetchedIndex = await fetchJson(QUESTION_INDEX_PATH)
-        memoryCache.questionIndex = Array.isArray(fetchedIndex) ? fetchedIndex : []
+        if (!Array.isArray(fetchedIndex) || !fetchedIndex.length || fetchedIndex.some((entry) => !entry?.filePath || !entry?.subject || !Number.isFinite(Number(entry.year)))) throw new Error('Invalid question index')
+        memoryCache.questionIndex = fetchedIndex
         writeCachedQuestionIndex(memoryCache.questionIndex)
       } catch (error) {
-        if (!memoryCache.questionIndex) {
-          throw error
-        }
+        if (!Array.isArray(cachedIndex) || !cachedIndex.length) throw error
+        memoryCache.questionIndex = cachedIndex
       }
 
       return memoryCache.questionIndex
@@ -148,7 +145,8 @@ async function getQuestionKeyMap() {
   if (!memoryCache.questionKeyMapPromise) {
     memoryCache.questionKeyMapPromise = fetchJson(QUESTION_KEY_MAP_PATH)
       .then((data) => {
-        memoryCache.questionKeyMap = data && typeof data === 'object' ? data : {}
+        if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid question key map')
+        memoryCache.questionKeyMap = data
         return memoryCache.questionKeyMap
       })
       .finally(() => {
@@ -173,13 +171,10 @@ export async function loadQuestionFile(filePath) {
       filePath,
       fetchJson(filePath)
         .then((data) => {
-          const normalizedData = Array.isArray(data) ? data : []
+          if (!Array.isArray(data) || data.some((question) => !question?.id || !question?.question || !question?.options || !question?.answer)) throw new Error('Invalid question file')
+          const normalizedData = data
           memoryCache.fileMap.set(filePath, normalizedData)
           return normalizedData
-        })
-        .catch((error) => {
-          memoryCache.fileMap.set(filePath, [])
-          throw error
         })
         .finally(() => {
           memoryCache.filePromiseMap.delete(filePath)
@@ -205,9 +200,8 @@ export async function loadQuestionsBySubjectAndYearRange(subject, startYear, end
     )
   })
 
-  const settledFiles = await Promise.allSettled(fileEntries.map((entry) => loadQuestionFile(entry.filePath)))
-
-  return settledFiles.flatMap((result) => (result.status === 'fulfilled' ? result.value : []))
+  const files = await Promise.all(fileEntries.map((entry) => loadQuestionFile(entry.filePath)))
+  return files.flat()
 }
 
 export async function loadQuestionsByKeys(questionKeys = []) {
@@ -220,27 +214,18 @@ export async function loadQuestionsByKeys(questionKeys = []) {
   const keyMap = await getQuestionKeyMap()
   const resolvedPaths = [...new Set(
     keys
-      .map((key) => keyMap[key] || keyMap[decodeURIComponent(key)] || keyMap[normalizeQuestionKey(key)])
+      .map((key) => keyMap[key] || keyMap[safeDecodeURIComponent(key)] || keyMap[normalizeQuestionKey(key)])
       .filter(Boolean),
   )]
 
-  const settledFiles = await Promise.allSettled(resolvedPaths.map((filePath) => loadQuestionFile(filePath)))
-  const allQuestions = settledFiles.flatMap((result) => (result.status === 'fulfilled' ? result.value : []))
-
-  return keys
-    .map((key) => {
-      const normalizedKey = normalizeQuestionKey(key)
-
-      return (
-        allQuestions.find(
-          (question) =>
-            question.id === key ||
-            getQuestionKey(question) === key ||
-            normalizeQuestionKey(question) === normalizedKey,
-        ) || null
-      )
-    })
-    .filter(Boolean)
+  const files = await Promise.all(resolvedPaths.map((filePath) => loadQuestionFile(filePath)))
+  const questionMap = new Map()
+  for (const question of files.flat()) {
+    questionMap.set(question.id, question)
+    questionMap.set(getQuestionKey(question), question)
+    questionMap.set(normalizeQuestionKey(question), question)
+  }
+  return keys.map((key) => questionMap.get(key) || questionMap.get(safeDecodeURIComponent(key)) || questionMap.get(normalizeQuestionKey(key))).filter(Boolean)
 }
 
 export async function getQuestionByKey(questionKey) {

@@ -17,7 +17,7 @@ function ExamCatalogPage() {
         <Navbar subtitle="國考科系選擇" title="選擇國考科系" />
 
         <section className="grid gap-4 md:grid-cols-2">
-          <article className="rounded-2xl border border-blue-200 bg-[linear-gradient(135deg,#ffffff_0%,#eff6ff_100%)] p-6 shadow-sm md:p-8">
+          <article className="rounded-2xl border border-blue-200 bg-blue-50 p-6 shadow-sm md:p-8">
             <span className="inline-flex rounded-full bg-blue-600 px-3 py-1 text-xs font-bold text-white">
               已開放
             </span>

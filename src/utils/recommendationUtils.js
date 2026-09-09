@@ -9,9 +9,9 @@ import {
   getTodayWrongQuestions,
   getTodayReviewedQuestionCount,
   getWrongBookItems,
-} from './storageUtils'
-import { getDueForReview, getSubjectPowerStats, getWrongClearanceSummary } from './growthUtils'
-import { getWrongReviewStats } from './wrongReviewUtils'
+} from './storageUtils.js'
+import { getDueForReview, getSubjectPowerStats, getWrongClearanceSummary } from './growthUtils.js'
+import { getWrongReviewStats } from './wrongReviewUtils.js'
 
 function getItemKey(item) {
   return item?.questionKey || item?.key || item?.id || item?.questionId || ''
@@ -114,7 +114,7 @@ export function getTodayFeedbackSummary() {
         : `你今天完成 ${answeredCount} 題，正確率 ${accuracy}%。目前沒有明顯錯題集中。`,
     nextStep:
       wrongCount > 0
-        ? `建議先複習今天錯的 ${wrongCount} 題${focusItems.length > 0 ? `，特別是 ${focusItems.join('、')}` : ''}。`
+        ? `今天累計 ${wrongCount} 次答錯，建議回顧錯題本${focusItems.length > 0 ? `，特別是 ${focusItems.join('、')}` : ''}。`
         : '可以繼續完成一回正式作答，或回顧收藏題保持手感。',
   }
 }

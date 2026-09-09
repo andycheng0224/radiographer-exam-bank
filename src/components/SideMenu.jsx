@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import useDialog from '../utils/useDialog'
+import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import ThemeToggle from './ThemeToggle'
 
@@ -40,20 +41,7 @@ function SideMenu({ buttonClassName = '' }) {
   const [isOpen, setIsOpen] = useState(false)
   const closeMenu = () => setIsOpen(false)
 
-  useEffect(() => {
-    if (!isOpen) {
-      return undefined
-    }
-
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        closeMenu()
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen])
+  const dialogRef = useDialog(isOpen, closeMenu)
 
   return (
     <>
@@ -62,6 +50,7 @@ function SideMenu({ buttonClassName = '' }) {
         onClick={() => setIsOpen(true)}
         className={`inline-flex items-center justify-center rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-800 transition hover:bg-slate-50 ${buttonClassName}`}
         aria-label="打開主選單"
+        aria-expanded={isOpen}
       >
         ☰ 主選單
       </button>
@@ -74,7 +63,7 @@ function SideMenu({ buttonClassName = '' }) {
             className="absolute inset-0 bg-slate-950/35"
             onClick={closeMenu}
           />
-          <aside className="absolute inset-y-0 left-0 flex w-[min(92vw,320px)] flex-col border-r border-slate-200 bg-white p-4 shadow-xl">
+          <aside ref={dialogRef} role="dialog" aria-modal="true" aria-label="主選單" className="overflow-y-auto absolute inset-y-0 left-0 flex w-[min(92vw,320px)] flex-col border-r border-slate-200 bg-white p-4 shadow-xl">
             <div className="flex items-center justify-between gap-3 border-b border-slate-200 pb-4">
               <div>
                 <p className="text-xs font-semibold text-slate-500">快速選單</p>

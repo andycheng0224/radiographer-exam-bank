@@ -1,3 +1,5 @@
+import useConfirmation from '../components/useConfirmation'
+import useDialog from '../utils/useDialog'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import BackLink from '../components/BackLink'
@@ -16,6 +18,7 @@ import {
   appendTodayWrongQuestions,
   getBookmarkIds,
   getQuestionKey,
+  getPracticeYearRange,
   saveExamResult,
   saveSingleSubjectExamResult,
   saveWrongQuestionIds,
@@ -28,18 +31,22 @@ import {
 } from '../utils/subjectUtils'
 import { getQuestionIndex, loadQuestionsBySubjectAndYearRange } from '../utils/questionDataLoader'
 
+import { clearQuizDraft, getRemainingSeconds, readQuizDraft, restoreDraftQuestions, saveQuizDraft } from '../utils/quizSessionUtils'
+
 function QuizPage() {
+  const [confirm, confirmationDialog] = useConfirmation()
   const navigate = useNavigate()
   const { subject: subjectParam } = useParams()
   const [searchParams] = useSearchParams()
-  const subject = decodeURIComponent(subjectParam || '')
+  const subject = subjectParam || ''
   const [questionIndex, setQuestionIndex] = useState([])
   const [subjectQuestions, setSubjectQuestions] = useState([])
   const [isLoadingQuestions, setIsLoadingQuestions] = useState(true)
   const [loadError, setLoadError] = useState('')
   const availableYears = useMemo(() => getAvailableYearsFromIndex(questionIndex), [questionIndex])
-  const defaultStartYear = availableYears[0] ?? 100
-  const defaultEndYear = availableYears[availableYears.length - 1] ?? 115
+  const savedRange = useMemo(() => getPracticeYearRange(), [])
+  const defaultStartYear = availableYears.includes(savedRange.startYear) ? savedRange.startYear : availableYears[0] ?? 100
+  const defaultEndYear = availableYears.includes(savedRange.endYear) ? savedRange.endYear : availableYears[availableYears.length - 1] ?? 115
   const requestedStartYear = Number(searchParams.get('startYear')) || defaultStartYear
   const requestedEndYear = Number(searchParams.get('endYear')) || defaultEndYear
   const startYear = availableYears.includes(requestedStartYear) ? requestedStartYear : defaultStartYear
@@ -58,7 +65,10 @@ function QuizPage() {
   const [showTimeWarning, setShowTimeWarning] = useState(false)
   const [isSubmitted, setIsSubmitted] = useState(false)
   const [isNavigatorOpen, setIsNavigatorOpen] = useState(false)
-  const countedAnswerIdsRef = useRef(new Set())
+  const navigatorRef = useDialog(isNavigatorOpen, () => setIsNavigatorOpen(false))
+  const submittedRef = useRef(false)
+  const [deadline, setDeadline] = useState(null)
+  const [retryCount, setRetryCount] = useState(0)
 
   const getQuestionStateKey = (question) => getQuestionKey(question) || question?.id || ''
   const getStoredAnswer = (question) => {
@@ -101,7 +111,7 @@ function QuizPage() {
     return () => {
       isCancelled = true
     }
-  }, [])
+  }, [retryCount])
 
   useEffect(() => {
     if (questionIndex.length === 0) {
@@ -136,63 +146,52 @@ function QuizPage() {
     return () => {
       isCancelled = true
     }
-  }, [questionIndex, subject, startYear, endYear])
+  }, [questionIndex, subject, startYear, endYear, retryCount])
 
   useEffect(() => {
-    if (isLoadingQuestions) {
-      return
-    }
-
-    if (!hasEnoughQuestions) {
-      setExamQuestions([])
-      setCurrentIndex(0)
-      setAnswerMap({})
-      setFlaggedQuestionKeys([])
-      setSecondsLeft(EXAM_DURATION_SECONDS)
-      setHasShownFiveMinuteWarning(false)
-      setShowTimeWarning(false)
-      setIsSubmitted(false)
-      setIsNavigatorOpen(false)
-      return
-    }
-
-    setExamQuestions(generateRandomExamQuestions(subjectQuestions, QUIZ_LENGTH))
-    setCurrentIndex(0)
-    setAnswerMap({})
-    setFlaggedQuestionKeys([])
-    countedAnswerIdsRef.current = new Set()
-    setSecondsLeft(EXAM_DURATION_SECONDS)
+    if (isLoadingQuestions) return
+    if (!hasEnoughQuestions || loadError) { setExamQuestions([]); setDeadline(null); return }
+    const draft = readQuizDraft('exam', subject, startYear, endYear)
+    const restored = restoreDraftQuestions(draft, subjectQuestions)
+    const canRestore = restored.length === QUIZ_LENGTH
+    const nextDeadline = canRestore ? draft.deadline : Date.now() + EXAM_DURATION_SECONDS * 1000
+    setExamQuestions(canRestore ? restored : generateRandomExamQuestions(subjectQuestions, QUIZ_LENGTH))
+    setCurrentIndex(canRestore ? Math.max(0, Math.min(QUIZ_LENGTH - 1, Number(draft.currentIndex) || 0)) : 0)
+    setAnswerMap(canRestore ? Object.fromEntries(Object.entries(draft.answers).filter(([key, answer]) => draft.questionKeys.includes(key) && ['A','B','C','D'].includes(answer))) : {})
+    setFlaggedQuestionKeys(canRestore && Array.isArray(draft.flaggedKeys) ? draft.flaggedKeys.filter((key) => draft.questionKeys.includes(key)) : [])
+    setDeadline(nextDeadline)
+    setSecondsLeft(getRemainingSeconds(nextDeadline))
     setHasShownFiveMinuteWarning(false)
     setShowTimeWarning(false)
     setIsSubmitted(false)
+    submittedRef.current = false
     setIsNavigatorOpen(false)
-  }, [subject, startYear, endYear, hasEnoughQuestions, isLoadingQuestions, subjectQuestions])
+  }, [subject, startYear, endYear, hasEnoughQuestions, isLoadingQuestions, subjectQuestions, loadError])
 
   useEffect(() => {
-    if (!hasEnoughQuestions || isSubmitted) {
-      return undefined
-    }
-
-    const timer = window.setInterval(() => {
-      setSecondsLeft((prev) => Math.max(prev - 1, 0))
-    }, 1000)
-
-    return () => window.clearInterval(timer)
-  }, [hasEnoughQuestions, isSubmitted])
+    if (!deadline || isSubmitted || isLoadingQuestions || !examQuestions.length) return
+    saveQuizDraft('exam', { subject, startYear, endYear, deadline,
+      questionKeys: examQuestions.map(getQuestionKey), answers: answerMap, currentIndex, flaggedKeys: flaggedQuestionKeys })
+  }, [subject, startYear, endYear, deadline, examQuestions, answerMap, currentIndex, flaggedQuestionKeys, isSubmitted, isLoadingQuestions])
 
   useEffect(() => {
-    if (secondsLeft !== 300 || hasShownFiveMinuteWarning || isSubmitted) {
+    if (!deadline || isSubmitted || isLoadingQuestions) return
+    const tick = () => setSecondsLeft(getRemainingSeconds(deadline))
+    const timer = window.setInterval(tick, 1000)
+    window.addEventListener('focus', tick)
+    document.addEventListener('visibilitychange', tick)
+    return () => { clearInterval(timer); window.removeEventListener('focus', tick); document.removeEventListener('visibilitychange', tick) }
+  }, [deadline, isSubmitted, isLoadingQuestions])
+
+  useEffect(() => {
+    if (secondsLeft > 300 || secondsLeft === 0 || hasShownFiveMinuteWarning || isSubmitted || !deadline) {
       return undefined
     }
 
     setShowTimeWarning(true)
     setHasShownFiveMinuteWarning(true)
 
-    const timeout = window.setTimeout(() => {
-      setShowTimeWarning(false)
-    }, 3500)
 
-    return () => window.clearTimeout(timeout)
   }, [secondsLeft, hasShownFiveMinuteWarning, isSubmitted])
 
   useEffect(() => {
@@ -204,15 +203,14 @@ function QuizPage() {
   }, [secondsLeft, isSubmitted, hasEnoughQuestions])
 
   const submitExam = (submissionType) => {
-    if (isSubmitted) {
-      return
-    }
+    if (submittedRef.current || isLoadingQuestions || !examQuestions.length) return
+    submittedRef.current = true
 
     const calculatedResult = calculateExamResult(examQuestions, answerMap)
     const summary = calculatedResult
     const perQuestionResults = calculatedResult.perQuestionResults
     const wrongQuestions = perQuestionResults.filter((question) => question.status === 'wrong')
-    const elapsedSeconds = EXAM_DURATION_SECONDS - secondsLeft
+    const elapsedSeconds = EXAM_DURATION_SECONDS - Math.min(EXAM_DURATION_SECONDS, getRemainingSeconds(deadline))
     const submittedAt = Date.now()
     const resultPayload = {
       examId: `${subject}-${submittedAt}`,
@@ -220,14 +218,8 @@ function QuizPage() {
       startYear,
       endYear,
       yearRange: `${startYear}–${endYear} 年`,
-      questions: examQuestions,
       questionsSnapshot: examQuestions,
-      answers: answerMap,
       userAnswersSnapshot: answerMap,
-      summary,
-      calculatedResult,
-      perQuestionResults,
-      wrongQuestions,
       elapsedSeconds,
       submissionType,
       submittedAt,
@@ -235,6 +227,7 @@ function QuizPage() {
 
     setIsSubmitted(true)
     updateTodayStats({
+      answeredCountDelta: summary.correctCount + summary.wrongCount,
       correctCountDelta: summary.correctCount,
       wrongCountDelta: summary.wrongCount,
     })
@@ -254,23 +247,8 @@ function QuizPage() {
     appendTodayWrongQuestions(wrongQuestions)
     saveWrongQuestionIds(wrongQuestions)
     saveExamResult(subject, resultPayload)
-    recordGrowthFromExamSubmission(resultPayload)
-
-    if (import.meta.env.DEV) {
-      const invariantCheck =
-        summary.correctCount + summary.wrongCount + summary.unansweredCount === summary.totalCount
-
-      console.log('[exam-submit] questions.length', examQuestions.length)
-      console.log('[exam-submit] userAnswers.count', Object.keys(answerMap).length)
-      console.log('[exam-submit] first 10 userAnswers', Object.entries(answerMap).slice(0, 10))
-      console.log('[exam-submit] first 10 perQuestionResults', perQuestionResults.slice(0, 10))
-      console.log('[exam-submit] counts', {
-        correctCount: summary.correctCount,
-        wrongCount: summary.wrongCount,
-        unansweredCount: summary.unansweredCount,
-      })
-      console.log('[exam-submit] invariant', invariantCheck)
-    }
+    recordGrowthFromExamSubmission({ ...resultPayload, perQuestionResults })
+    clearQuizDraft('exam', subject, startYear, endYear)
 
     navigate(`/results/${encodeURIComponent(subject)}?startYear=${startYear}&endYear=${endYear}`, {
       state: resultPayload,
@@ -293,11 +271,6 @@ function QuizPage() {
       return
     }
 
-    if (!countedAnswerIdsRef.current.has(questionKey)) {
-      countedAnswerIdsRef.current.add(questionKey)
-      updateTodayStats({ answeredCountDelta: 1 })
-    }
-
     setAnswerMap((prev) => ({
       ...prev,
       [questionKey]: answer,
@@ -311,14 +284,15 @@ function QuizPage() {
 
     setCurrentIndex(nextIndex)
     setIsNavigatorOpen(false)
+    document.getElementById('question-card')?.scrollIntoView({ block: 'start' })
   }
 
-  const handleRestart = () => {
+  const handleRestart = async () => {
     if (!hasEnoughQuestions) {
       return
     }
 
-    const shouldRestart = window.confirm('重新抽題會清除目前作答進度、答案與剩餘時間，確定要重新抽題嗎？')
+    const shouldRestart = await confirm('重新抽題會清除目前作答進度、答案與剩餘時間，確定要重新抽題嗎？')
 
     if (!shouldRestart) {
       return
@@ -328,7 +302,9 @@ function QuizPage() {
     setCurrentIndex(0)
     setAnswerMap({})
     setFlaggedQuestionKeys([])
-    countedAnswerIdsRef.current = new Set()
+    clearQuizDraft('exam', subject, startYear, endYear)
+    submittedRef.current = false
+    setDeadline(Date.now() + EXAM_DURATION_SECONDS * 1000)
     setSecondsLeft(EXAM_DURATION_SECONDS)
     setHasShownFiveMinuteWarning(false)
     setShowTimeWarning(false)
@@ -356,23 +332,10 @@ function QuizPage() {
     )
   }
 
-  const handleSubmitClick = () => {
-    if (flaggedQuestionKeys.length > 0) {
-      const shouldContinueWithFlagged = window.confirm(
-        `你還有 ${flaggedQuestionKeys.length} 題已標注，確定要交卷嗎？`,
-      )
-
-      if (!shouldContinueWithFlagged) {
-        return
-      }
-    }
-
-    const shouldSubmit = window.confirm('確定要繳交本次測驗嗎？繳交後將無法修改答案。')
-
-    if (!shouldSubmit) {
-      return
-    }
-
+  const handleSubmitClick = async () => {
+    const unanswered = examQuestions.length - answeredCount
+    const message = `本次已作答 ${answeredCount} 題，未作答 ${unanswered} 題，標注 ${flaggedQuestionKeys.length} 題。\n確定要繳交嗎？繳交後無法修改答案。`
+    if (!(await confirm(message, '確認交卷', '確認交卷'))) return
     submitExam('manual')
   }
 
@@ -405,6 +368,7 @@ function QuizPage() {
         {loadError && (
           <section className="rounded-[1.75rem] border border-rose-200 bg-white p-6 shadow-[0_20px_50px_rgba(15,23,42,0.06)]">
             <p className="text-lg font-bold text-rose-700">{loadError}</p>
+            <Button onClick={() => setRetryCount((value) => value + 1)} className="mt-4">重試載入</Button>
           </section>
         )}
 
@@ -426,6 +390,7 @@ function QuizPage() {
               目前年份範圍：民國 {startYear} 年至 {endYear} 年
             </p>
             <p className="mt-1 text-slate-600">目前可用題數：{subjectQuestions.length} 題</p>
+            <Button className="mt-4" onClick={() => navigate('/settings')}>調整年份範圍</Button>
           </section>
         )}
 
@@ -434,7 +399,7 @@ function QuizPage() {
             <div className="space-y-4">
               {showTimeWarning && (
                 <div className="rounded-2xl border border-amber-300 bg-amber-50 px-5 py-4 text-sm font-semibold text-amber-900 shadow-[0_12px_30px_rgba(245,158,11,0.12)]">
-                  作答時間還剩 5 分鐘
+                  作答時間不到 5 分鐘，請確認尚未作答的題目。
                 </div>
               )}
 
@@ -474,6 +439,7 @@ function QuizPage() {
               </section>
 
               <QuestionCard
+                key={currentQuestionKey}
                 questionNumber={currentIndex + 1}
                 totalQuestions={QUIZ_LENGTH}
                 question={currentQuestion}
@@ -518,7 +484,7 @@ function QuizPage() {
                 <p className="mt-2 text-sm font-semibold text-slate-800">
                   已作答 {answeredCount} / {QUIZ_LENGTH}
                 </p>
-                <p className="mt-1 text-sm text-slate-500">可自由切換題目並在繳交前修改答案。</p>
+                <p className="mt-1 text-sm text-slate-500">作答進度自動儲存，可離開後繼續；每日統計於交卷後更新。</p>
               </div>
               <div className="mt-4 grid grid-cols-5 gap-2">
                 {examQuestions.map((question, index) => {
@@ -592,6 +558,7 @@ function QuizPage() {
           {isNavigatorOpen && (
             <div className="fixed inset-0 z-50 bg-slate-950/40 md:hidden" onClick={() => setIsNavigatorOpen(false)}>
               <div
+                ref={navigatorRef} role="dialog" aria-modal="true" aria-label="題號導覽"
                 className="absolute inset-x-0 bottom-0 max-h-[72vh] rounded-t-[2rem] border border-slate-200 bg-white p-5 shadow-[0_-20px_50px_rgba(15,23,42,0.16)]"
                 onClick={(event) => event.stopPropagation()}
               >
@@ -640,6 +607,7 @@ function QuizPage() {
           )}
         </>
       )}
+      {confirmationDialog}
     </main>
   )
 }

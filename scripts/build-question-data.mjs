@@ -1,5 +1,7 @@
-import { mkdir, readFile, writeFile, cp } from 'node:fs/promises'
+import { mkdir, readFile, writeFile, readdir, stat, rm } from 'node:fs/promises'
+import { readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
+import { EXAM_SUBJECTS } from '../src/constants/subjects.js'
 import { fileURLToPath } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -12,38 +14,7 @@ const publicDataDir = path.join(projectRoot, 'public', 'data')
 const publicQuestionsDir = path.join(publicDataDir, 'questions')
 const publicUploadsDir = path.join(projectRoot, 'public', 'uploads')
 
-const subjects = [
-  {
-    name: '基礎醫學',
-    slug: 'basic',
-    sourceSubjects: ['基礎醫學（包括解剖學、生理學與病理學）', '解剖生理'],
-  },
-  {
-    name: '醫學物理學與輻射安全',
-    slug: 'physics-safety',
-    sourceSubjects: ['醫學物理學與輻射安全', '放射物理', '輻射防護'],
-  },
-  {
-    name: '放射線器材學',
-    slug: 'equipment',
-    sourceSubjects: ['放射線器材學（包括磁振學與超音波學）', '放射線器材學'],
-  },
-  {
-    name: '放射線診斷原理與技術學',
-    slug: 'diagnostic-techniques',
-    sourceSubjects: ['放射線診斷原理與技術學', '放射診斷技術'],
-  },
-  {
-    name: '放射線治療原理與技術學',
-    slug: 'radiation-therapy',
-    sourceSubjects: ['放射線治療原理與技術學', '放射治療'],
-  },
-  {
-    name: '核子醫學診療原理與技術學',
-    slug: 'nuclear-medicine',
-    sourceSubjects: ['核子醫學診療原理與技術學', '核子醫學'],
-  },
-]
+const subjects = EXAM_SUBJECTS
 
 const subjectAliasMap = new Map(
   subjects.flatMap((subject) =>
@@ -183,6 +154,9 @@ async function ensureDir(dirPath) {
 
 async function main() {
   const rawQuestions = JSON.parse(await readFile(sourceQuestionsPath, 'utf8'))
+  if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) throw new Error('Question bank is empty')
+  const seenIds = new Set()
+  const referencedImages = new Set()
   const groupedQuestions = new Map()
   const questionIndex = []
   const questionKeyMap = {}
@@ -191,12 +165,17 @@ async function main() {
   for (const rawQuestion of rawQuestions) {
     const canonicalSubject = getCanonicalSubject(rawQuestion.subject)
 
-    if (!canonicalSubject) {
-      continue
-    }
+    if (!canonicalSubject) throw new Error(`Unknown subject: ${rawQuestion.id}`)
+    if (!rawQuestion.id || seenIds.has(rawQuestion.id)) throw new Error(`Duplicate/missing question id: ${rawQuestion.id}`)
+    seenIds.add(rawQuestion.id)
+    if (!rawQuestion.question || !rawQuestion.answer || !['A', 'B', 'C', 'D'].every((key) => typeof rawQuestion.options?.[key] === 'string' && rawQuestion.options[key].trim())) throw new Error(`Invalid question: ${rawQuestion.id}`)
 
     const normalizedQuestion = normalizeQuestionRecord(rawQuestion)
     const year = Number(normalizedQuestion.year)
+    if (!Number.isInteger(year) || year < 100 || year > 115) throw new Error(`Invalid year: ${rawQuestion.id}`)
+    for (const match of JSON.stringify(normalizedQuestion).matchAll(/\{\{image:([^}]+)\}\}/g)) referencedImages.add(match[1].split('/').pop())
+    if (normalizedQuestion.image?.src) referencedImages.add(normalizedQuestion.image.src.split('/').pop())
+    for (const image of normalizedQuestion.images || []) if (image.path) referencedImages.add(image.path.split('/').pop())
     const filePath = `/data/questions/${canonicalSubject.slug}/${year}.json`
     const mapKey = normalizedQuestion.id || buildNormalizedQuestionKey(normalizedQuestion)
     const normalizedMapKey = buildNormalizedQuestionKey(normalizedQuestion)
@@ -261,15 +240,33 @@ async function main() {
     'utf8',
   )
 
-  await cp(sourceUploadsDir, publicUploadsDir, {
-    recursive: true,
-    force: true,
-  })
+  // Validate references before replacing any generated assets.
+  await Promise.all([...referencedImages].map((name) => stat(path.join(sourceUploadsDir, name))))
+  await ensureDir(publicUploadsDir)
+  const imageNames = [...referencedImages]
+  for (let offset = 0; offset < imageNames.length; offset += 1) {
+      const name = imageNames[offset]
+      const source = path.join(sourceUploadsDir, name)
+      const target = path.join(publicUploadsDir, name)
+      const sourceBytes = readFileSync(source)
+      if (!sourceBytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+        throw new Error(`Expected browser-compatible PNG: ${name}. Normalize source image formats before building.`)
+      }
+      let targetBytes = null
+      try { targetBytes = readFileSync(target) } catch (error) { if (error.code !== 'ENOENT') throw error }
+      if (!targetBytes || !sourceBytes.equals(targetBytes)) {
+        writeFileSync(target, sourceBytes)
+      }
+    if (offset % 2048 === 0) console.log(`[build:data] images ${offset + 1}/${imageNames.length}`)
+  }
+  for (const entry of await readdir(publicUploadsDir, { withFileTypes: true })) {
+    if (entry.isFile() && !referencedImages.has(entry.name)) await rm(path.join(publicUploadsDir, entry.name))
+  }
 
   console.log(`[build:data] wrote ${questionIndex.length} data files to public/data/questions`)
   console.log(`[build:data] question index entries: ${questionIndex.length}`)
   console.log(`[build:data] question key map entries: ${Object.keys(questionKeyMap).length}`)
-  console.log('[build:data] uploads synced to public/uploads')
+  console.log(`[build:data] ${referencedImages.size} referenced images synced to public/uploads`)
 }
 
 main().catch((error) => {

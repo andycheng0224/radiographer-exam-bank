@@ -1,3 +1,6 @@
+import useConfirmation from '../components/useConfirmation'
+import { QuestionRichText } from '../components/QuestionContent'
+import { isAcceptedAnswer } from '../utils/quizUtils'
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import BackLink from '../components/BackLink'
@@ -16,8 +19,8 @@ import {
   toggleBookmark,
   updateWrongQuestionStatus,
 } from '../utils/storageUtils'
-import { EBBINGHAUS_INTERVALS, getReviewStage, isMastered, isReviewDueToday } from '../utils/growthUtils'
-import { getCanonicalSubjectName, getWrongQuestionDetail } from '../utils/subjectUtils'
+import { EBBINGHAUS_INTERVALS, getReviewStage, isMastered, isReviewDueToday, getReviewSnapshot } from '../utils/growthUtils'
+import { getCanonicalSubjectName, getWrongQuestionDetail, formatQuestionMetadata as canonicalMetadata } from '../utils/subjectUtils'
 import { loadQuestionsByKeys } from '../utils/questionDataLoader'
 
 const ALL_SUBJECTS_LABEL = '全部'
@@ -89,110 +92,17 @@ function getDisplaySubject(question) {
   return pickValue(question?.subject, question?.subjectName, question?.category)
 }
 
-function parseMetadataFromId(id) {
-  const rawId = pickValue(id)
-
-  if (!rawId) {
-    return {}
-  }
-
-  const match = String(rawId).match(/^(\d{2,3})-(\d+)-(.+)-(\d{1,3})$/)
-
-  if (!match) {
-    return {}
-  }
-
-  const [, year, examRound, subject, questionNumber] = match
-
-  return {
-    year,
-    examRound,
-    subject,
-    questionNumber,
-  }
-}
-
-function formatExamRound(examRound) {
-  const value = pickValue(examRound)
-
-  if (!value) {
-    return ''
-  }
-
-  if (value === '1') {
-    return '第一次'
-  }
-
-  if (value === '2') {
-    return '第二次'
-  }
-
-  return value
-}
-
-function normalizeQuestionNumber(questionNumber) {
-  const value = pickValue(questionNumber)
-
-  if (!value) {
-    return ''
-  }
-
-  const numericValue = Number(value)
-  return Number.isFinite(numericValue) ? String(numericValue) : value
-}
-
-function formatQuestionMetadata(question) {
-  const fallback = parseMetadataFromId(question?.id)
-  const year = pickValue(question?.year, question?.examYear, question?.rocYear, question?.questionYear, fallback.year)
-  const roundValue = pickValue(
-    question?.exam_round,
-    question?.examRound,
-    question?.session,
-    question?.examSession,
-    question?.round,
-    question?.time,
-    fallback.examRound,
-  )
-  const round = formatExamRound(roundValue)
-  const subject = getCanonicalSubjectName(
-    pickValue(question?.subject, question?.subjectName, question?.category, fallback.subject),
-  )
-  const questionNumber = normalizeQuestionNumber(
-    question?.question_number,
-    question?.questionNumber,
-    question?.number,
-    question?.index,
-    question?.questionIndex,
-    question?.originalIndex,
-    fallback.questionNumber,
-  )
-
-  const parts = []
-
-  if (year) {
-    parts.push(`民國 ${year} 年`)
-  }
-
-  if (round) {
-    parts.push(round)
-  }
-
-  if (subject) {
-    parts.push(subject)
-  }
-
-  if (questionNumber) {
-    parts.push(`第 ${questionNumber} 題`)
-  }
-
-  return parts.length > 0 ? `歷屆來源：${parts.join('｜')}` : '歷屆來源：未標記'
-}
+function formatQuestionMetadata(question) { return canonicalMetadata(question, { prefix: '歷屆來源：', fallback: '歷屆來源：未標記' }) }
 
 function WrongBookPage() {
+  const [confirm, confirmationDialog] = useConfirmation()
   const [wrongQuestionIds, setWrongQuestionIds] = useState(() => getWrongBookIds())
   const [bookmarkIds, setBookmarkIds] = useState(() => getBookmarkIds())
   const [wrongQuestions, setWrongQuestions] = useState([])
   const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+  const [retryCount, setRetryCount] = useState(0)
+  const [visibleCount, setVisibleCount] = useState(20)
   const [selectedSubject, setSelectedSubject] = useState(ALL_SUBJECTS_LABEL)
 
   useEffect(() => {
@@ -201,6 +111,7 @@ function WrongBookPage() {
     async function loadWrongQuestions() {
       try {
         setIsLoading(true)
+        setLoadError('')
         const wrongItems = getWrongBookItems()
         const nextQuestions = await loadQuestionsByKeys(wrongQuestionIds)
         const mergedQuestions = wrongQuestionIds
@@ -218,10 +129,13 @@ function WrongBookPage() {
 
         if (!isCancelled) {
           setWrongQuestions(mergedQuestions)
+          if (mergedQuestions.length < wrongQuestionIds.length) setLoadError('部分錯題暫時無法取得，原有紀錄仍保留。')
         }
       } catch {
         if (!isCancelled) {
-          setWrongQuestions([])
+          setLoadError('錯題載入失敗，原有紀錄仍保留，請重試。')
+          const cached = getWrongBookItems().map((item) => getWrongQuestionDetail(item, [], { questionId: getQuestionKey(item) })).filter(Boolean)
+          setWrongQuestions(cached)
         }
       } finally {
         if (!isCancelled) {
@@ -235,8 +149,9 @@ function WrongBookPage() {
     return () => {
       isCancelled = true
     }
-  }, [wrongQuestionIds])
+  }, [wrongQuestionIds, retryCount])
 
+  const reviewContext = useMemo(() => getReviewSnapshot(), [wrongQuestions])
   const todayReviewedCount = getTodayReviewedQuestionCount()
   const recentAddedCount = useMemo(
     () =>
@@ -300,8 +215,8 @@ function WrongBookPage() {
     setBookmarkIds(toggleBookmark(question))
   }
 
-  const handleClearWrongBook = () => {
-    const confirmed = window.confirm('確定要清空錯題本嗎？\n\n這會刪除目前錯題本內累積的所有題目，此操作無法復原。')
+  const handleClearWrongBook = async () => {
+    const confirmed = await confirm('確定要清空錯題本嗎？\n\n這會刪除目前錯題本內累積的所有題目，此操作無法復原。')
 
     if (!confirmed) {
       return
@@ -381,7 +296,7 @@ function WrongBookPage() {
                     <button
                       key={subject}
                       type="button"
-                      onClick={() => setSelectedSubject(subject)}
+                      onClick={() => { setSelectedSubject(subject); setVisibleCount(20) }}
                       className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
                         isActive
                           ? 'border-slate-900 bg-slate-900 text-white'
@@ -397,13 +312,16 @@ function WrongBookPage() {
           </div>
 
           <div className="mt-8 grid gap-4">
+            {loadError && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+              {loadError} <Button className="ml-2" variant="secondary" onClick={() => setRetryCount((value) => value + 1)}>重試載入</Button>
+            </div>}
             {isLoading && (
               <div className="rounded-[1.5rem] border border-slate-200 bg-slate-50 p-5 text-slate-600">
                 正在載入錯題資料...
               </div>
             )}
 
-            {!isLoading && wrongQuestions.length === 0 && (
+            {!isLoading && !loadError && wrongQuestions.length === 0 && (
               <div className="rounded-[1.75rem] border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center">
                 <h3 className="text-xl font-bold text-slate-950">目前沒有錯題</h3>
                 <p className="mt-3 text-sm leading-relaxed text-slate-600">
@@ -426,7 +344,7 @@ function WrongBookPage() {
               </div>
             )}
 
-            {filteredWrongQuestions.map((question) => {
+            {filteredWrongQuestions.slice(0, visibleCount).map((question) => {
               const questionKey = getQuestionKey(question)
               const userAnswer = question.userAnswer || ''
               const correctAnswer = question.correctAnswer || question.answer || ''
@@ -434,9 +352,9 @@ function WrongBookPage() {
               const tags = extractQuestionTags(question).slice(0, 6)
               const displaySubject = getDisplaySubject(question) || normalizeQuestionSubject(question)
               const metadataLabel = formatQuestionMetadata(question)
-              const reviewStage = getReviewStage(questionKey)
-              const mastered = isMastered(questionKey)
-              const dueToday = isReviewDueToday(questionKey, question.createdAt || question.answeredAt || question.date)
+              const reviewStage = getReviewStage(questionKey, reviewContext)
+              const mastered = isMastered(questionKey, reviewContext)
+              const dueToday = isReviewDueToday(questionKey, question.reviewResetAt || question.createdAt || question.answeredAt || question.date, reviewContext)
 
               return (
                 <article
@@ -484,12 +402,12 @@ function WrongBookPage() {
                     </div>
 
                     <div className="space-y-3">
-                      <h2 className="text-xl font-bold leading-relaxed text-slate-950">{question.question}</h2>
+                      <QuestionRichText text={question.question} alt="題目附圖" textClassName="text-xl font-bold leading-relaxed text-slate-950" />
 
                       <div className="grid gap-3">
                         {Object.entries(question.options || {}).map(([optionKey, optionText]) => {
-                          const isCorrect = optionKey === correctAnswer
-                          const isWrongSelected = userAnswer && optionKey === userAnswer && userAnswer !== correctAnswer
+                          const isCorrect = isAcceptedAnswer(correctAnswer, optionKey)
+                          const isWrongSelected = userAnswer && optionKey === userAnswer && !isAcceptedAnswer(correctAnswer, userAnswer)
                           const toneClassName = isCorrect
                             ? 'border-emerald-200 bg-emerald-50 text-emerald-900'
                             : isWrongSelected
@@ -499,10 +417,10 @@ function WrongBookPage() {
                           return (
                             <div key={optionKey} className={`rounded-2xl border px-4 py-3 ${toneClassName}`}>
                               <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                                <p className="text-sm leading-relaxed">
+                                <div className="min-w-0 flex-1 text-sm leading-relaxed">
                                   <span className="mr-2 font-semibold">{optionKey}.</span>
-                                  {optionText}
-                                </p>
+                                  <QuestionRichText text={optionText} alt={`選項 ${optionKey} 附圖`} imageClassName="max-h-80 w-full object-contain" />
+                                </div>
                                 <div className="flex flex-wrap gap-2 text-xs font-semibold">
                                   {isWrongSelected && (
                                     <span className="rounded-full bg-white/70 px-2 py-1 text-rose-700">你的答案</span>
@@ -534,9 +452,7 @@ function WrongBookPage() {
                     {explanation && (
                       <div className="rounded-[1.25rem] border border-slate-200 bg-slate-50 p-4">
                         <p className="text-sm font-semibold text-slate-900">詳解</p>
-                        <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-600">
-                          {explanation}
-                        </p>
+                        <QuestionRichText text={explanation} alt="詳解附圖" textClassName="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-600" />
                       </div>
                     )}
 
@@ -560,9 +476,13 @@ function WrongBookPage() {
                 </article>
               )
             })}
+            {filteredWrongQuestions.length > visibleCount && <Button variant="secondary" onClick={() => setVisibleCount((value) => value + 20)}>
+              載入更多（已顯示 {Math.min(visibleCount, filteredWrongQuestions.length)} / {filteredWrongQuestions.length} 題）
+            </Button>}
           </div>
         </section>
       </div>
+      {confirmationDialog}
     </main>
   )
 }

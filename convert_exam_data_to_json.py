@@ -216,8 +216,11 @@ def parse_pdf_metadata(doc: fitz.Document) -> Tuple[Optional[int], Optional[str]
 def save_pdf_image(image_bytes: bytes, question_id: str, image_index: int) -> str:
     ASSETS_DIR.mkdir(parents=True, exist_ok=True)
     image_path = ASSETS_DIR / f"{question_id}-{image_index}.png"
-    with open(image_path, "wb") as handle:
-        handle.write(image_bytes)
+    # PDF streams may be JPEG or JPEG 2000 even when the output name is .png.
+    pixmap = fitz.Pixmap(image_bytes)
+    if pixmap.colorspace and pixmap.colorspace.n > 3:
+        pixmap = fitz.Pixmap(fitz.csRGB, pixmap)
+    image_path.write_bytes(pixmap.tobytes("png"))
     return str(image_path.relative_to(ROOT))
 
 

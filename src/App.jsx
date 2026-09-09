@@ -1,4 +1,8 @@
-import { Route, Routes } from 'react-router-dom'
+import { useEffect } from 'react'
+import ErrorBoundary from './components/ErrorBoundary'
+import StorageNotice from './components/StorageNotice'
+import NotFoundPage from './components/NotFoundPage'
+import { Route, Routes, useLocation } from 'react-router-dom'
 import HomePage from './pages/HomePage'
 import QuizPage from './pages/QuizPage'
 import ResultPage from './pages/ResultPage'
@@ -133,8 +137,13 @@ const publicPageConfigs = {
 }
 
 function App() {
+  const location = useLocation()
+  useEffect(() => { window.scrollTo(0, 0) }, [location.pathname])
   return (
-    <Routes>
+    <>
+    <StorageNotice />
+    <ErrorBoundary key={location.pathname}>
+    <Routes key={location.pathname}>
       <Route path="/" element={<PlatformHomePage />} />
       <Route path="/exams" element={<ExamCatalogPage />} />
       <Route path="/radiographer" element={<HomePage />} />
@@ -154,7 +163,10 @@ function App() {
       <Route path="/wrong-book" element={<WrongBookPage />} />
       <Route path="/bookmarks" element={<BookmarkPage />} />
       <Route path="/questions/:questionId" element={<QuestionDetailPage />} />
+      <Route path="*" element={<NotFoundPage />} />
     </Routes>
+    </ErrorBoundary>
+    </>
   )
 }
 

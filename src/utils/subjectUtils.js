@@ -1,5 +1,5 @@
-import { getQuestionKey } from './storageUtils'
-import { EXAM_SUBJECTS, QUESTION_BANK_YEAR_RANGE } from '../constants/subjects'
+import { getQuestionKey } from './storageUtils.js'
+import { EXAM_SUBJECTS, QUESTION_BANK_YEAR_RANGE } from '../constants/subjects.js'
 
 const SUBJECT_ALIAS_MAP = new Map(
   EXAM_SUBJECTS.flatMap((subject) => [subject.name, ...subject.sourceSubjects].map((alias) => [normalizeText(alias), subject.name])),
@@ -102,8 +102,12 @@ export function formatExamRoundLabel(value) {
   return String(value || normalizedValue)
 }
 
+export function safeDecodeURIComponent(value = '') {
+  try { return decodeURIComponent(value) } catch { return String(value) }
+}
+
 function parseKeyLikeValue(value) {
-  const decodedValue = typeof value === 'string' ? decodeURIComponent(value) : ''
+  const decodedValue = typeof value === 'string' ? safeDecodeURIComponent(value) : ''
   const trimmedValue = decodedValue.trim()
 
   if (!trimmedValue) {
@@ -160,13 +164,14 @@ export function buildQuestionDescriptor(questionLike) {
     questionLike.questionKey ||
     getQuestionKey(questionLike)
 
-  const year = extractYear(questionLike.year || rawKey)
+  const keyDescriptor = parseKeyLikeValue(rawKey)
+  const year = extractYear(questionLike.year) || keyDescriptor.year
   const round = normalizeRoundValue(
-    questionLike.exam_round || questionLike.examRound || questionLike.session || questionLike.exam_session || rawKey,
+    questionLike.exam_round || questionLike.examRound || questionLike.session || questionLike.exam_session || keyDescriptor.round,
   )
-  const subject = normalizeSubjectValue(questionLike.subject || rawKey)
+  const subject = normalizeSubjectValue(questionLike.subject || keyDescriptor.subject)
   const questionNumber = extractQuestionNumber(
-    questionLike.question_number ?? questionLike.questionNumber ?? questionLike.no ?? rawKey,
+    questionLike.question_number ?? questionLike.questionNumber ?? questionLike.no ?? keyDescriptor.questionNumber,
   )
 
   return {
@@ -445,14 +450,8 @@ export function findQuestionForWrongItem(wrongItem, allQuestions, routeParams = 
   const routeDescriptor = buildQuestionDescriptor(routeParams.questionId || routeParams.decodedQuestionId || routeParams.routeKey || '')
 
   if (wrongItem?.id || wrongItem?.questionId) {
-    const exactIdMatch =
-      questionList.find(
-        (question) =>
-          question.id === wrongItem.id ||
-          question.id === wrongItem.questionId ||
-          question.questionId === wrongItem.id ||
-          question.questionId === wrongItem.questionId,
-      ) || null
+    const exactIds = new Set([wrongItem.id, wrongItem.questionId].filter(Boolean))
+    const exactIdMatch = questionList.find((question) => exactIds.has(question.id) || (question.questionId && exactIds.has(question.questionId))) || null
 
     if (exactIdMatch) {
       return {
@@ -510,48 +509,10 @@ export function findQuestionForWrongItem(wrongItem, allQuestions, routeParams = 
     .filter((item) => item.sameYear && item.sameQuestionNumber && item.subjectScore > 0 && item.sameRound)
     .sort((left, right) => right.subjectScore - left.subjectScore)
 
-  if (fieldCombinationMatches.length > 0) {
+  if (fieldCombinationMatches.length === 1) {
     return {
       question: fieldCombinationMatches[0].question,
       matchMethod: 'field_combination_match',
-    }
-  }
-
-  const sameYearNumberMatches = questionList
-    .map((question) => ({
-      question,
-      descriptor: buildQuestionDescriptor(question),
-    }))
-    .filter(
-      ({ descriptor }) =>
-        descriptor.year &&
-        descriptor.questionNumber &&
-        descriptor.year === wrongDescriptor.year &&
-        descriptor.questionNumber === wrongDescriptor.questionNumber,
-    )
-    .sort((left, right) => {
-      const rightScore = scoreSubjectSimilarity(
-        right.descriptor.subject,
-        wrongDescriptor.subject || routeDescriptor.subject,
-      )
-      const leftScore = scoreSubjectSimilarity(
-        left.descriptor.subject,
-        wrongDescriptor.subject || routeDescriptor.subject,
-      )
-      return rightScore - leftScore
-    })
-
-  if (sameYearNumberMatches.length === 1) {
-    return {
-      question: sameYearNumberMatches[0].question,
-      matchMethod: 'same_year_number_single_match',
-    }
-  }
-
-  if (sameYearNumberMatches.length > 1) {
-    return {
-      question: sameYearNumberMatches[0].question,
-      matchMethod: 'same_year_number_subject_priority_match',
     }
   }
 

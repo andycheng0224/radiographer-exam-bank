@@ -24,7 +24,7 @@ function formatDateLabel(dateString) {
 }
 
 function getScoreBarWidth(score) {
-  return Math.max(10, Math.min(100, Number(score || 0)))
+  return Math.max(0, Math.min(100, Number(score || 0)))
 }
 
 function MiniStat({ label, value }) {

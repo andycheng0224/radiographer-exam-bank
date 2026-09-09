@@ -1,3 +1,4 @@
+import { readBrowserStorage, writeBrowserStorage, removeBrowserStorage, getBrowserStorageKeys } from './browserStorage.js'
 const WRONG_BOOK_KEY = 'radiographer_exam_bank_wrong_book'
 const BOOKMARK_KEY = 'radiographer_exam_bank_bookmarks'
 const EXAM_RESULT_KEY_PREFIX = 'radiographer_exam_bank_exam_result'
@@ -15,6 +16,7 @@ const GROWTH_QUESTION_STATE_KEY = 'radiographer_exam_bank_growth_question_states
 const REVIEW_HISTORY_KEY = 'exam_review_history'
 const GUEST_USER_ID_KEY = 'radiographer_exam_bank_guest_user_id'
 const LEGACY_STORAGE_CLAIMS_KEY = 'radiographer_exam_bank_legacy_storage_claims'
+const LEGACY_RESET_USERS_KEY = 'radiographer_exam_bank_legacy_reset_users'
 const SCOPED_KEY_SEPARATOR = '__'
 const DEFAULT_DAILY_GOAL = 40
 const MIN_DAILY_GOAL = 1
@@ -34,10 +36,14 @@ const USER_PROGRESS_BASE_KEYS = [
   GROWTH_DAILY_STATS_KEY,
   GROWTH_QUESTION_STATE_KEY,
   REVIEW_HISTORY_KEY,
+  'radiographer_exam_bank_wrong_review_stats',
+  'radiographer_exam_bank_active_quiz',
+  'radiographer_exam_bank_active_wrong_review',
+  'radiographer_exam_bank_wrong_review_result',
 ]
 
 function canUseStorage() {
-  return typeof window !== 'undefined' && typeof window.localStorage !== 'undefined'
+  return typeof window !== 'undefined'
 }
 
 function readRawStorageValue(key, fallbackValue) {
@@ -46,7 +52,7 @@ function readRawStorageValue(key, fallbackValue) {
   }
 
   try {
-    const rawValue = window.localStorage.getItem(key)
+    const rawValue = readBrowserStorage(key)
     if (!rawValue) {
       return fallbackValue
     }
@@ -62,7 +68,7 @@ function writeRawStorageValue(key, value) {
     return
   }
 
-  window.localStorage.setItem(key, JSON.stringify(value))
+  writeBrowserStorage(key, JSON.stringify(value))
 }
 
 function normalizeReviewHistoryMap(value) {
@@ -122,7 +128,7 @@ function getCurrentAuthenticatedUserId() {
 
   for (const key of storageCandidates) {
     try {
-      const rawValue = window.localStorage.getItem(key)
+      const rawValue = readBrowserStorage(key)
 
       if (!rawValue) {
         continue
@@ -152,7 +158,7 @@ function getOrCreateGuestUserId() {
     return 'guest'
   }
 
-  const existingGuestId = window.localStorage.getItem(GUEST_USER_ID_KEY)
+  const existingGuestId = readBrowserStorage(GUEST_USER_ID_KEY)
 
   if (existingGuestId) {
     return existingGuestId
@@ -163,7 +169,7 @@ function getOrCreateGuestUserId() {
       ? crypto.randomUUID()
       : `guest-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 
-  window.localStorage.setItem(GUEST_USER_ID_KEY, nextGuestId)
+  writeBrowserStorage(GUEST_USER_ID_KEY, nextGuestId)
   return nextGuestId
 }
 
@@ -191,6 +197,7 @@ function claimLegacyStorageKeyForUser(storageKey, userId = getCurrentEffectiveUs
   if (!storageKey || !userId) {
     return false
   }
+  if (readRawStorageValue(LEGACY_RESET_USERS_KEY, {})?.[userId]) return false
 
   const claimsMap = getLegacyStorageClaimsMap()
   const claimedUserId = claimsMap[storageKey]
@@ -329,7 +336,7 @@ function normalizeWrongBookEntry(entry) {
   }
 
   if (entry && typeof entry === 'object') {
-    const key = entry.key || entry.id || entry.questionId
+    const key = entry.questionKey || entry.key || entry.id || entry.questionId
 
     if (!key) {
       return null
@@ -345,6 +352,7 @@ function normalizeWrongBookEntry(entry) {
       session: entry.session || entry.exam_round || entry.examRound || '',
       createdAt: entry.createdAt || entry.savedAt || entry.answeredAt || null,
       answeredAt: entry.answeredAt || entry.createdAt || null,
+      reviewResetAt: entry.reviewResetAt || null,
       date: entry.date || '',
       savedAt: entry.savedAt || null,
       updatedAt: entry.updatedAt || null,
@@ -377,7 +385,7 @@ function normalizeWrongBookEntry(entry) {
   return null
 }
 
-function getWrongBookEntries() {
+export function getWrongBookEntries() {
   const entries = readStorageArray(WRONG_BOOK_KEY)
   const entryMap = new Map()
 
@@ -402,7 +410,7 @@ function normalizeBookmarkEntry(entry) {
   }
 
   if (entry && typeof entry === 'object') {
-    return entry.key || entry.id || entry.questionId || ''
+    return entry.questionKey || entry.key || entry.id || entry.questionId || ''
   }
 
   return ''
@@ -733,46 +741,18 @@ export function getWrongBookItems() {
 }
 
 export function getReviewHistory(userId = getCurrentEffectiveUserId()) {
-  if (!canUseStorage()) {
-    return {}
+  const scopedValue = readRawStorageValue(getScopedStorageKey(REVIEW_HISTORY_KEY, userId), undefined)
+  if (scopedValue !== undefined) return normalizeReviewHistoryMap(scopedValue)
+  const legacy = readRawStorageValue(REVIEW_HISTORY_KEY, undefined)
+  if (legacy !== undefined && claimLegacyStorageKeyForUser(REVIEW_HISTORY_KEY, userId)) {
+    writeReviewHistory(legacy, userId)
+    return normalizeReviewHistoryMap(legacy)
   }
-
-  try {
-    const scopedKey = getScopedStorageKey(REVIEW_HISTORY_KEY, userId)
-    const scopedValue = window.localStorage.getItem(scopedKey)
-
-    if (scopedValue) {
-      return normalizeReviewHistoryMap(JSON.parse(scopedValue))
-    }
-
-    const legacyValue = window.localStorage.getItem(REVIEW_HISTORY_KEY)
-
-    if (!legacyValue) {
-      return {}
-    }
-
-    const parsedLegacyValue = normalizeReviewHistoryMap(JSON.parse(legacyValue))
-
-    if (claimLegacyStorageKeyForUser(REVIEW_HISTORY_KEY, userId)) {
-      window.localStorage.setItem(scopedKey, JSON.stringify(parsedLegacyValue))
-      return parsedLegacyValue
-    }
-
-    return {}
-  } catch {
-    return {}
-  }
+  return {}
 }
 
 export function writeReviewHistory(reviewHistory, userId = getCurrentEffectiveUserId()) {
-  if (!canUseStorage()) {
-    return
-  }
-
-  window.localStorage.setItem(
-    getScopedStorageKey(REVIEW_HISTORY_KEY, userId),
-    JSON.stringify(normalizeReviewHistoryMap(reviewHistory)),
-  )
+  writeRawStorageValue(getScopedStorageKey(REVIEW_HISTORY_KEY, userId), normalizeReviewHistoryMap(reviewHistory))
 }
 
 export function clearReviewHistoryForQuestion(questionKey, userId = getCurrentEffectiveUserId()) {
@@ -821,9 +801,12 @@ export function getTodayReviewedQuestionCount(userId = getCurrentEffectiveUserId
   const todayKey = getLocalDateKey()
   const reviewHistory = getReviewHistory(userId)
 
-  return Object.values(reviewHistory).filter(
-    (reviewDates) => Array.isArray(reviewDates) && reviewDates[reviewDates.length - 1] === todayKey,
-  ).length
+  const reviewed = new Set(Object.entries(reviewHistory).filter(([, dates]) => dates.at(-1) === todayKey).map(([key]) => key))
+  const reviewStats = readStorageValue('radiographer_exam_bank_wrong_review_stats', {})
+  Object.entries(reviewStats || {}).forEach(([key, stats]) => {
+    if (isTodayDateValue(stats?.lastReviewedAt, todayKey)) reviewed.add(key)
+  })
+  return reviewed.size
 }
 
 export function getTodayWrongQuestions() {
@@ -919,11 +902,11 @@ function getStoredExamResultPayloads() {
   const prefix = `${EXAM_RESULT_KEY_PREFIX}:`
   const scopedSuffix = `${SCOPED_KEY_SEPARATOR}${getCurrentEffectiveUserId()}`
 
-  return Object.keys(window.localStorage)
+  return getBrowserStorageKeys()
     .filter((key) => key.startsWith(prefix) && key.endsWith(scopedSuffix))
     .map((key) => {
       try {
-        const parsed = JSON.parse(window.localStorage.getItem(key) || 'null')
+        const parsed = JSON.parse(readBrowserStorage(key) || 'null')
         return parsed && typeof parsed === 'object' ? parsed : null
       } catch {
         return null
@@ -1237,7 +1220,7 @@ export function saveWrongQuestionIds(questionItems) {
             ? questionItem.session || questionItem.exam_round || questionItem.examRound || ''
             : '',
         createdAt:
-          typeof questionItem === 'object' ? questionItem.createdAt || questionItem.answeredAt || now : now,
+          typeof questionItem === 'object' ? entryMap.get(questionKey)?.createdAt || questionItem.createdAt || questionItem.answeredAt || now : entryMap.get(questionKey)?.createdAt || now,
         answeredAt:
           typeof questionItem === 'object' ? questionItem.answeredAt || questionItem.createdAt || now : now,
         date: typeof questionItem === 'object' ? questionItem.date || todayKey : todayKey,
@@ -1321,6 +1304,14 @@ export function updateWrongQuestionStatus(questionKey, status = 'resolved') {
 
   if (status === 'resolved') {
     clearReviewHistoryForQuestion(questionKey)
+    const states = readStorageValue(GROWTH_QUESTION_STATE_KEY, {})
+    const previous = states?.[questionKey] || {}
+    writeStorageValue(GROWTH_QUESTION_STATE_KEY, {
+      ...states,
+      [questionKey]: { ...previous, questionId: questionKey, userId: getCurrentEffectiveUserId(),
+        subject: currentEntry.subject || previous.subject || '', wrongCount: Math.max(1, Number(previous.wrongCount || 0)),
+        masteryLevel: 'mastered', clearedAt: previous.clearedAt || Date.now(), nextReviewAt: null },
+    })
   }
 
   writeWrongBookEntries(Array.from(entryMap.values()))
@@ -1361,7 +1352,12 @@ function getExamResultKey(subject) {
 }
 
 export function saveExamResult(subject, result) {
-  writeStorageValue(getExamResultKey(subject), result)
+  if (!result || typeof result !== 'object') return
+  const { questions, questionsSnapshot, answers, userAnswersSnapshot, summary, calculatedResult, perQuestionResults, wrongQuestions, ...metadata } = result
+  writeStorageValue(getExamResultKey(subject), { ...metadata,
+    questionsSnapshot: questionsSnapshot || questions || perQuestionResults || calculatedResult?.perQuestionResults || [],
+    userAnswersSnapshot: userAnswersSnapshot || answers || {},
+  })
 }
 
 export function getExamResult(subject) {
@@ -1567,27 +1563,18 @@ export function setDailyGoal(goal) {
   return normalizedGoal
 }
 
-export function getPracticeYearRange() {
-  const parsed = readStorageValue(PRACTICE_YEAR_RANGE_KEY, {})
-  const startYear = Number(parsed?.startYear || 100)
-  const endYear = Number(parsed?.endYear || 115)
-
-  return {
-    startYear: Number.isFinite(startYear) ? startYear : 100,
-    endYear: Number.isFinite(endYear) ? Math.max(startYear, endYear) : 115,
-  }
+function normalizePracticeYearRange(value = {}) {
+  const normalize = (number, fallback) => Number.isFinite(Number(number)) && Number(number) >= 100 && Number(number) <= 115 ? Math.round(Number(number)) : fallback
+  const startYear = normalize(value?.startYear, 100)
+  return { startYear, endYear: Math.max(startYear, normalize(value?.endYear, 115)) }
 }
-
+export function getPracticeYearRange() {
+  return normalizePracticeYearRange(readStorageValue(PRACTICE_YEAR_RANGE_KEY, {}))
+}
 export function setPracticeYearRange(nextRange = {}) {
-  const startYear = Number(nextRange.startYear || 100)
-  const endYear = Number(nextRange.endYear || 115)
-  const normalizedRange = {
-    startYear: Number.isFinite(startYear) ? startYear : 100,
-    endYear: Number.isFinite(endYear) ? Math.max(startYear, endYear) : 115,
-  }
-
-  writeStorageValue(PRACTICE_YEAR_RANGE_KEY, normalizedRange)
-  return normalizedRange
+  const range = normalizePracticeYearRange(nextRange)
+  writeStorageValue(PRACTICE_YEAR_RANGE_KEY, range)
+  return range
 }
 
 export function getStudyStats() {
@@ -1740,16 +1727,19 @@ export function clearCurrentUserProgress(userId = getCurrentEffectiveUserId()) {
   const allowedExactKeys = new Set(USER_PROGRESS_BASE_KEYS.map((baseKey) => getScopedStorageKey(baseKey, effectiveUserId)))
   const allowedPrefixKeys = new Set([EXAM_RESULT_KEY_PREFIX])
   const clearedKeys = []
+  // A reset must not re-import the same user's older unscoped records later.
+  const resetUsers = readRawStorageValue(LEGACY_RESET_USERS_KEY, {})
+  writeRawStorageValue(LEGACY_RESET_USERS_KEY, { ...resetUsers, [effectiveUserId]: true })
 
-  Object.keys(window.localStorage).forEach((storageKey) => {
+  getBrowserStorageKeys().forEach((storageKey) => {
     if (!storageKey.endsWith(scopedSuffix)) {
       return
     }
 
     const baseKey = storageKey.slice(0, -scopedSuffix.length)
 
-    if (allowedExactKeys.has(storageKey) || allowedPrefixKeys.has(baseKey)) {
-      window.localStorage.removeItem(storageKey)
+    if (allowedExactKeys.has(storageKey) || [...allowedPrefixKeys].some((prefix) => baseKey.startsWith(`${prefix}:`))) {
+      removeBrowserStorage(storageKey)
       clearedKeys.push(storageKey)
     }
   })

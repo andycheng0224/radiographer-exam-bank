@@ -2,8 +2,8 @@ import {
   EXAM_FULL_SCORE,
   EXAM_QUESTION_COUNT,
   PASSING_SCORE,
-} from '../constants/subjects'
-import { getQuestionKey } from './storageUtils'
+} from '../constants/subjects.js'
+import { getQuestionKey } from './storageUtils.js'
 
 export const QUIZ_LENGTH = EXAM_QUESTION_COUNT
 
@@ -71,9 +71,9 @@ export function calculateExamResult(questions, userAnswers = {}) {
     const rawUserAnswer = getStoredUserAnswer(question, safeUserAnswers, index)
     const normalizedUserAnswer = normalizeAnswer(rawUserAnswer)
     const correctAnswer = question?.answer ?? question?.correctAnswer ?? ''
-    const normalizedCorrectAnswer = normalizeAnswer(correctAnswer)
+    const normalizedCorrectAnswer = String(correctAnswer).trim()
     const isAnswered = normalizedUserAnswer !== ''
-    const isCorrect = isAnswered && normalizedUserAnswer === normalizedCorrectAnswer
+    const isCorrect = isAnswered && isAcceptedAnswer(correctAnswer, normalizedUserAnswer)
     const status = !isAnswered ? 'unanswered' : isCorrect ? 'correct' : 'wrong'
 
     return {
@@ -148,14 +148,16 @@ export function formatTime(seconds) {
   return `${minutes}:${remainingSeconds}`
 }
 
+export function getAcceptedAnswers(answer) {
+  const value = String(answer ?? '').normalize('NFKC').trim().toUpperCase()
+  if (value === '送分') return ['A', 'B', 'C', 'D']
+  return [...new Set(value.match(/[A-D]/g) || [])]
+}
+export function isAcceptedAnswer(correctAnswer, userAnswer) {
+  return getAcceptedAnswers(correctAnswer).includes(normalizeAnswer(userAnswer))
+}
 export function getAnswerStatus(question, userAnswer, optionKey) {
-  if (optionKey === question.answer) {
-    return 'correct'
-  }
-
-  if (userAnswer && optionKey === userAnswer && userAnswer !== question.answer) {
-    return 'wrong'
-  }
-
+  if (isAcceptedAnswer(question.answer ?? question.correctAnswer, optionKey)) return 'correct'
+  if (userAnswer && optionKey === normalizeAnswer(userAnswer)) return 'wrong'
   return 'default'
 }

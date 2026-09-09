@@ -1,4 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
+import useConfirmation from '../components/useConfirmation'
+import useDialog from '../utils/useDialog'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import BackLink from '../components/BackLink'
 import Button from '../components/Button'
@@ -6,21 +8,27 @@ import Navbar from '../components/Navbar'
 import QuestionCard from '../components/QuestionCard'
 import SeoMeta from '../components/SeoMeta'
 import { calculateExamResult } from '../utils/quizUtils'
-import { getQuestionKey } from '../utils/storageUtils'
+import { getQuestionKey, updateTodayStats, appendTodayWrongQuestions, writeUserScopedStorageValue } from '../utils/storageUtils'
+import { recordGrowthFromExamSubmission } from '../utils/growthUtils'
+import { clearQuizDraft, readQuizDraft, saveQuizDraft } from '../utils/quizSessionUtils'
 import { getWrongQuestionDetail } from '../utils/subjectUtils'
 import { loadQuestionsByKeys } from '../utils/questionDataLoader'
 import { getWrongItemsBySubject, pickWrongReviewItems, applyWrongReviewResults } from '../utils/wrongReviewUtils'
 
 function WrongReviewQuizPage() {
+  const [confirm, confirmationDialog] = useConfirmation()
   const navigate = useNavigate()
   const { subject: subjectParam } = useParams()
-  const subject = decodeURIComponent(subjectParam || '')
+  const subject = subjectParam || ''
   const [reviewQuestions, setReviewQuestions] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
   const [currentIndex, setCurrentIndex] = useState(0)
   const [answerMap, setAnswerMap] = useState({})
   const [isNavigatorOpen, setIsNavigatorOpen] = useState(false)
+  const navigatorRef = useDialog(isNavigatorOpen, () => setIsNavigatorOpen(false))
+  const [retryCount, setRetryCount] = useState(0)
+  const submittedRef = useRef(false)
   const currentQuestion = reviewQuestions[currentIndex]
   const currentQuestionKey = currentQuestion ? getQuestionKey(currentQuestion) : ''
   const selectedAnswer = currentQuestionKey ? answerMap[currentQuestionKey] || '' : ''
@@ -33,7 +41,11 @@ function WrongReviewQuizPage() {
       try {
         setIsLoading(true)
         setLoadError('')
-        const wrongItems = pickWrongReviewItems(getWrongItemsBySubject(subject))
+        const draft = readQuizDraft('review', subject)
+        const currentItems = getWrongItemsBySubject(subject)
+        const byKey = new Map(currentItems.map((item) => [getQuestionKey(item), item]))
+        const draftItems = draft?.questionKeys.map((key) => byKey.get(key)).filter(Boolean) || []
+        const wrongItems = draftItems.length ? draftItems : pickWrongReviewItems(currentItems)
         const wrongKeys = wrongItems.map((item) => item.questionKey || item.key || getQuestionKey(item)).filter(Boolean)
         const sourceQuestions = await loadQuestionsByKeys(wrongKeys)
         const mergedQuestions = wrongItems
@@ -46,8 +58,9 @@ function WrongReviewQuizPage() {
 
         if (!isCancelled) {
           setReviewQuestions(mergedQuestions)
-          setCurrentIndex(0)
-          setAnswerMap({})
+          setCurrentIndex(draftItems.length ? Math.max(0, Math.min(mergedQuestions.length - 1, Number(draft.currentIndex) || 0)) : 0)
+          setAnswerMap(draftItems.length ? Object.fromEntries(Object.entries(draft.answers).filter(([key, answer]) => wrongKeys.includes(key) && ['A','B','C','D'].includes(answer))) : {})
+          submittedRef.current = false
         }
       } catch {
         if (!isCancelled) {
@@ -66,7 +79,11 @@ function WrongReviewQuizPage() {
     return () => {
       isCancelled = true
     }
-  }, [subject])
+  }, [subject, retryCount])
+
+  useEffect(() => {
+    if (!isLoading && reviewQuestions.length && !submittedRef.current) saveQuizDraft('review', { subject, questionKeys: reviewQuestions.map(getQuestionKey), answers: answerMap, currentIndex })
+  }, [subject, reviewQuestions, answerMap, currentIndex, isLoading])
 
   const handleSelectAnswer = (answer) => {
     if (!currentQuestion) {
@@ -92,33 +109,34 @@ function WrongReviewQuizPage() {
 
     setCurrentIndex(nextIndex)
     setIsNavigatorOpen(false)
+    document.getElementById('question-card')?.scrollIntoView({ block: 'start' })
   }
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
+    if (submittedRef.current || isLoading || !reviewQuestions.length) return
     const unansweredCount = reviewQuestions.length - answeredCount
     const message =
       unansweredCount > 0
         ? `目前還有 ${unansweredCount} 題未作答，確定要交卷嗎？`
         : '確定要繳交本次錯題複習嗎？'
 
-    if (!window.confirm(message)) {
+    if (!(await confirm(message, '確認交卷', '確認交卷'))) {
       return
     }
 
+    submittedRef.current = true
     const calculatedResult = calculateExamResult(reviewQuestions, answerMap)
     const wrongReviewUpdate = applyWrongReviewResults(calculatedResult.perQuestionResults)
-
-    navigate(`/wrong-review/${encodeURIComponent(subject)}/result`, {
-      replace: true,
-      state: {
-        subject,
-        submittedAt: Date.now(),
-        questions: reviewQuestions,
-        answers: answerMap,
-        calculatedResult,
-        wrongReviewUpdate,
-      },
-    })
+    const payload = { subject, submittedAt: Date.now(), questionsSnapshot: reviewQuestions,
+      userAnswersSnapshot: answerMap, calculatedResult, wrongReviewUpdate }
+    updateTodayStats({ answeredCountDelta: calculatedResult.correctCount + calculatedResult.wrongCount,
+      correctCountDelta: calculatedResult.correctCount, wrongCountDelta: calculatedResult.wrongCount })
+    appendTodayWrongQuestions(calculatedResult.perQuestionResults.filter((item) => item.status === 'wrong'))
+    recordGrowthFromExamSubmission({ ...payload, mode: 'review', perQuestionResults: calculatedResult.perQuestionResults })
+    const { calculatedResult: ignored, ...storedPayload } = payload
+    writeUserScopedStorageValue('radiographer_exam_bank_wrong_review_result', storedPayload)
+    clearQuizDraft('review', subject)
+    navigate(`/wrong-review/${encodeURIComponent(subject)}/result`, { replace: true, state: payload })
   }
 
   const questionButtons = useMemo(
@@ -159,6 +177,7 @@ function WrongReviewQuizPage() {
         {!isLoading && loadError ? (
           <section className="rounded-[1.75rem] border border-rose-200 bg-white p-6 shadow-sm">
             <p className="font-bold text-rose-700">{loadError}</p>
+            <Button className="mt-4" onClick={() => setRetryCount((value) => value + 1)}>重試載入</Button>
           </section>
         ) : null}
 
@@ -209,6 +228,7 @@ function WrongReviewQuizPage() {
               </section>
 
               <QuestionCard
+                key={currentQuestionKey}
                 questionNumber={currentIndex + 1}
                 totalQuestions={reviewQuestions.length}
                 question={currentQuestion}
@@ -272,6 +292,7 @@ function WrongReviewQuizPage() {
           {isNavigatorOpen ? (
             <div className="fixed inset-0 z-50 bg-slate-950/40 md:hidden" onClick={() => setIsNavigatorOpen(false)}>
               <div
+                ref={navigatorRef} role="dialog" aria-modal="true" aria-label="題號導覽"
                 className="absolute inset-x-0 bottom-0 max-h-[72vh] rounded-t-[2rem] border border-slate-200 bg-white p-5 shadow-[0_-20px_50px_rgba(15,23,42,0.16)]"
                 onClick={(event) => event.stopPropagation()}
               >
@@ -298,6 +319,7 @@ function WrongReviewQuizPage() {
           ) : null}
         </>
       ) : null}
+      {confirmationDialog}
     </main>
   )
 }

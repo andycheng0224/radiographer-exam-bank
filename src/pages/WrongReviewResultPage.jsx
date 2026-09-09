@@ -1,3 +1,7 @@
+import { useMemo } from 'react'
+import { readUserScopedStorageValue } from '../utils/storageUtils'
+import { calculateExamResult } from '../utils/quizUtils'
+import { QuestionRichText } from '../components/QuestionContent'
 import { Link, Navigate, useLocation, useParams } from 'react-router-dom'
 import BackLink from '../components/BackLink'
 import Button from '../components/Button'
@@ -8,8 +12,12 @@ import { formatQuestionMetadata } from '../utils/subjectUtils'
 function WrongReviewResultPage() {
   const location = useLocation()
   const { subject: subjectParam } = useParams()
-  const subject = decodeURIComponent(subjectParam || location.state?.subject || '')
-  const payload = location.state
+  const subject = subjectParam || location.state?.subject || ''
+  const payload = useMemo(() => {
+    const saved = location.state || readUserScopedStorageValue('radiographer_exam_bank_wrong_review_result', null)
+    if (!saved || saved.subject !== subject) return null
+    return { ...saved, calculatedResult: saved.calculatedResult || calculateExamResult(saved.questionsSnapshot, saved.userAnswersSnapshot) }
+  }, [location.state, subject])
 
   if (!payload?.calculatedResult) {
     return <Navigate to="/wrong-review" replace />
@@ -31,10 +39,11 @@ function WrongReviewResultPage() {
         <BackLink label="返回錯題複習" fallbackTo="/wrong-review" />
         <Navbar subtitle="Wrong Review Result" title={`${subject} 錯題複習結果`} />
 
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {[
             ['總題數', `${result.totalCount} 題`, 'slate'],
             ['答對題數', `${result.correctCount} 題`, 'emerald'],
+            ['未作答', `${result.unansweredCount} 題`, 'slate'],
             ['答錯題數', `${result.wrongCount} 題`, 'rose'],
             ['已移除錯題', `${removedCount} 題`, 'blue'],
             ['仍需加強', `${retainedCount} 題`, 'amber'],
@@ -77,9 +86,9 @@ function WrongReviewResultPage() {
                       <p className="text-sm font-semibold text-slate-600">
                         第 {index + 1} 題｜{formatQuestionMetadata(question)}
                       </p>
-                      <h2 className="mt-2 text-lg font-black leading-relaxed text-slate-950">
-                        {question.question || question.questionText || question.stem}
-                      </h2>
+                      <div className="mt-2 text-lg font-black leading-relaxed text-slate-950">
+                        <QuestionRichText text={question.question || question.questionText || question.stem} alt="題目附圖" />
+                      </div>
                     </div>
                     <span
                       className={`rounded-full px-3 py-1 text-sm font-bold ${
@@ -93,14 +102,11 @@ function WrongReviewResultPage() {
                     <p>你的答案：<span className="font-bold text-slate-950">{question.userAnswer || '未作答'}</span></p>
                     <p>正確答案：<span className="font-bold text-slate-950">{question.correctAnswer || question.answer}</span></p>
                   </div>
-                  {question.explanation ? (
-                    <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-                      <p className="text-sm font-bold text-slate-900">詳解</p>
-                      <p className="mt-2 whitespace-pre-line text-sm leading-7 text-slate-600">
-                        {typeof question.explanation === 'string' ? question.explanation : JSON.stringify(question.explanation)}
-                      </p>
-                    </div>
-                  ) : null}
+                  <Button as={Link} className="mt-4" variant="secondary"
+                    to={`/questions/${encodeURIComponent(question.questionKey)}`}
+                    state={{ from: 'wrong-review-result', subject, question, fallbackTo: `/wrong-review/${encodeURIComponent(subject)}/result` }}>
+                    查看完整題目與詳解
+                  </Button>
                 </article>
               )
             })}

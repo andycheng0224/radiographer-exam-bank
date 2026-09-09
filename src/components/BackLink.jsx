@@ -6,12 +6,8 @@ function BackLink({ label = '返回上一頁', fallbackTo = '/', className = '' 
   const fallback = location.state?.fallbackTo || fallbackTo
 
   const handleClick = () => {
-    if (window.history.length > 1) {
-      navigate(-1)
-      return
-    }
-
-    navigate(fallback)
+    if (label === '返回上一頁' && Number(window.history.state?.idx) > 0) navigate(-1)
+    else navigate(fallback)
   }
 
   return (

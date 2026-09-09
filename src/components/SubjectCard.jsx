@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import { QUIZ_LENGTH } from '../utils/quizUtils'
 
 const SUBJECT_BADGE_MAP = {
   基礎醫學: { label: '基', tone: 'bg-blue-50 text-blue-700 ring-blue-100' },
@@ -17,7 +18,7 @@ function SubjectCard({ subject, totalQuestions, yearRange, search = '' }) {
 
   return (
     <Link
-      to={`/quiz/${encodeURIComponent(subject)}${search}`}
+      to={Number(totalQuestions) >= QUIZ_LENGTH ? `/quiz/${encodeURIComponent(subject)}${search}` : '/settings'}
       className="group rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md"
     >
       <div className="flex flex-col gap-4">
@@ -38,7 +39,7 @@ function SubjectCard({ subject, totalQuestions, yearRange, search = '' }) {
 
         <div className="flex items-center justify-end">
           <span className="inline-flex shrink-0 items-center rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition group-hover:bg-blue-700">
-            開始測驗
+            {Number(totalQuestions) >= QUIZ_LENGTH ? '開始測驗' : '不足 80 題，調整年份'}
           </span>
         </div>
       </div>

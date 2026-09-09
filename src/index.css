@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import "tailwindcss" source("./");
 
 :root {
   color: #142033;
@@ -14,7 +14,7 @@
 
 body {
   margin: 0;
-  min-width: 320px;
+  min-width: 280px;
   min-height: 100vh;
   letter-spacing: 0.01em;
   color: #0f172a;
@@ -147,3 +147,17 @@ body {
 .theme-dark a {
   -webkit-tap-highlight-color: transparent;
 }
+
+:focus-visible { outline: 3px solid #60a5fa; outline-offset: 3px; }
+button, a, input, select { touch-action: manipulation; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; }
+main { overflow-wrap: anywhere; }
+.theme-dark .bg-sky-50, .theme-dark .bg-sky-100 { background-color: #0c3550 !important; }
+.theme-dark .text-sky-700, .theme-dark .text-sky-800, .theme-dark .text-sky-900 { color: #bae6fd !important; }
+.question-image { display: block; width: auto; max-width: 100%; margin-inline: auto; background: #fff; color-scheme: light; }
+@media (max-width: 767px) {
+  .fixed.bottom-0 { padding-bottom: max(0.75rem, env(safe-area-inset-bottom)); }
+  .fixed.bottom-0 button { padding-left: .35rem; padding-right: .35rem; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; } }

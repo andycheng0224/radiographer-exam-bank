@@ -22,8 +22,8 @@ function QuestionCard({
   })
 
   return (
-    <section className="rounded-[1.75rem] border border-slate-200 bg-white p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] md:p-8">
-      <div className="mb-6 flex items-center justify-between gap-4 border-b border-slate-200 pb-5">
+    <section id="question-card" className="scroll-mt-4 rounded-[1.75rem] border border-slate-200 bg-white p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] md:p-8">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
           <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">{modeLabel}</p>
           <span className="mt-2 inline-flex rounded-xl border border-slate-300 bg-slate-50 px-4 py-2 text-sm font-semibold text-slate-800">
@@ -57,7 +57,7 @@ function QuestionCard({
       <QuestionContent question={question} />
 
       <div className="mt-6 grid gap-3">
-        {Object.entries(question.options).map(([key, value]) => {
+        {Object.entries(question.options || {}).map(([key, value]) => {
           const isSelected = selectedAnswer === key
           const buttonClass = isSelected
             ? 'border-sky-500 bg-sky-50 text-sky-900'
@@ -68,6 +68,8 @@ function QuestionCard({
               key={key}
               type="button"
               onClick={() => onSelectAnswer(key)}
+              aria-pressed={isSelected}
+              aria-label={`選項 ${key}`}
               className={`rounded-2xl border px-4 py-4 text-left text-base font-medium transition ${buttonClass}`}
             >
               <div className="flex items-start gap-3">
@@ -76,6 +78,7 @@ function QuestionCard({
                 </span>
                 <div className="min-w-0 flex-1">
                   <QuestionRichText
+                    allowRetry={false}
                     text={value}
                     alt={`${question.id}-${key}`}
                     textClassName="whitespace-pre-line leading-relaxed text-slate-800"

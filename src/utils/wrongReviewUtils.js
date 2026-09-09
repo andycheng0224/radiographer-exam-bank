@@ -1,12 +1,14 @@
 import {
-  clearReviewHistoryForQuestion,
+  getReviewHistory,
+  writeReviewHistory,
   getQuestionKey,
   getWrongBookItems,
+  getWrongBookEntries,
   readUserScopedStorageValue,
-  removeWrongQuestion,
+
   writeUserScopedStorageValue,
-} from './storageUtils'
-import { getCanonicalSubjectName } from './subjectUtils'
+} from './storageUtils.js'
+import { getCanonicalSubjectName } from './subjectUtils.js'
 
 const WRONG_REVIEW_STATS_KEY = 'radiographer_exam_bank_wrong_review_stats'
 const MAX_WRONG_REVIEW_QUESTIONS = 40
@@ -139,31 +141,36 @@ export function recordWrongReviewAnswer(questionKey, result) {
 }
 
 export function applyWrongReviewResults(perQuestionResults = []) {
-  const summary = {
-    removedCount: 0,
-    retainedCount: 0,
+  const statsMap = getWrongReviewStats()
+  const currentItems = getWrongBookEntries()
+  const activeKeys = new Set(currentItems.filter((item) => item.status !== 'resolved').map(getQuestionKey))
+  const removed = new Set()
+  const wrongAnswers = new Map()
+  const history = getReviewHistory()
+  const now = nowIso()
+  let retainedCount = 0
+  for (const item of perQuestionResults) {
+    const key = getQuestionKey(item)
+    if (!key) continue
+    if (item.status !== 'correct') retainedCount += 1
+    if (!item.isAnswered) continue
+    const current = statsMap[key] || {}
+    const correct = item.status === 'correct'
+    const wrongCount = Number(current.wrongCount || 0) + (correct ? 0 : 1)
+    statsMap[key] = { attempts: Number(current.attempts || 0) + 1,
+      correctCount: Number(current.correctCount || 0) + (correct ? 1 : 0), wrongCount,
+      weight: correct ? 1 : 1 + Math.min(wrongCount, 5), lastReviewedAt: now, lastResult: correct ? 'correct' : 'wrong' }
+    if (correct && activeKeys.has(key)) removed.add(key)
+    if (!correct) {
+      wrongAnswers.set(key, item.userAnswer)
+    }
+    // A failed answer restarts the review interval; it cannot advance mastery.
+    delete history[key]
   }
-
-  perQuestionResults.forEach((item) => {
-    const questionKey = item.questionKey || getQuestionKey(item)
-
-    if (!questionKey || !item.isAnswered) {
-      return
-    }
-
-    if (item.status === 'correct') {
-      recordWrongReviewAnswer(questionKey, 'correct')
-      removeWrongQuestion(questionKey)
-      clearReviewHistoryForQuestion(questionKey)
-      summary.removedCount += 1
-      return
-    }
-
-    if (item.status === 'wrong') {
-      recordWrongReviewAnswer(questionKey, 'wrong')
-      summary.retainedCount += 1
-    }
-  })
-
-  return summary
+  // Write each large collection once per submission, not once per question.
+  writeWrongReviewStats(statsMap)
+  writeReviewHistory(history)
+  writeUserScopedStorageValue('radiographer_exam_bank_wrong_book', currentItems.filter((item) => !removed.has(getQuestionKey(item)))
+    .map((item) => wrongAnswers.has(getQuestionKey(item)) ? { ...item, userAnswer: wrongAnswers.get(getQuestionKey(item)), answeredAt: Date.now(), reviewResetAt: Date.now() } : item))
+  return { removedCount: removed.size, retainedCount }
 }

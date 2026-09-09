@@ -15,7 +15,16 @@ const THEME_LABELS = {
 
 function ThemeToggle({ compact = false }) {
   const [preference, setPreference] = useState(() => getThemePreference())
-  const resolvedTheme = resolveTheme(preference)
+  const [clockTime, setClockTime] = useState(() => new Date())
+  const resolvedTheme = resolveTheme(preference, clockTime)
+
+  useEffect(() => {
+    const sync = () => { setPreference(getThemePreference()); setClockTime(new Date()) }
+    const timer = setInterval(sync, 60000)
+    window.addEventListener('theme-preference-change', sync)
+    window.addEventListener('storage', sync)
+    return () => { clearInterval(timer); window.removeEventListener('theme-preference-change', sync); window.removeEventListener('storage', sync) }
+  }, [])
 
   useEffect(() => {
     applyResolvedTheme(resolvedTheme)

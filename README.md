@@ -15,7 +15,7 @@
 
 建議 Node 版本：
 
-- `20`
+- `20.19` 以上的 Node 20
 
 本專案已提供：
 
@@ -46,7 +46,7 @@ npm run build
 1. 執行 `npm run build:data`
 2. 生成 `public/data/question-index.json`
 3. 依科目 / 年份切出 `public/data/questions/...`
-4. 同步題目圖片到 `public/uploads`
+4. 只同步題庫實際引用的圖片到 `public/uploads`，移除該產物目錄內的過期圖片
 5. 執行 `vite build`
 
 Build output：
@@ -227,3 +227,15 @@ Cloudflare Pages 很適合這個 React + Vite 靜態網站，但有幾點要注�
 - Cloudflare Pages 部署設定完整
 
 作為部署前的主要驗證基準。
+
+## 穩定性回歸檢查
+
+```bash
+npm run check
+npm run build
+npm run preview -- --host 127.0.0.1
+```
+
+`check` 會編譯检查全部 JavaScript / JSX 原始碼並執行資料、判分、儲存與錯題複習的回歸測試。正式建置仍需通過 `npm run build`。
+
+作答草稿自動保存在目前瀏覽器；依科目與年份範圍分開保留進行中的測驗。交卷後更新每日統計。瀏覽器禁止儲存或空間不足時會提示並保留當前分頁的進度，提供下載備份。

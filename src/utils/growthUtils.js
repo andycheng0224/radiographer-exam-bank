@@ -9,7 +9,7 @@ import {
   getWrongBookItems,
   writeUserScopedStorageValue,
   writeReviewHistory as writeStoredReviewHistory,
-} from './storageUtils'
+} from './storageUtils.js'
 
 const ANSWER_LOG_KEY = 'radiographer_exam_bank_growth_answer_logs'
 const DAILY_STATS_KEY = 'radiographer_exam_bank_growth_daily_stats'
@@ -94,12 +94,12 @@ function writeQuestionStateMap(value) {
   writeStorageValue(QUESTION_STATE_KEY, value)
 }
 
-function hasQuestionStateMastery(questionId) {
+function hasQuestionStateMastery(questionId, context) {
   if (!questionId) {
     return false
   }
 
-  const questionState = getQuestionStateMap()[questionId]
+  const questionState = (context?.states || getQuestionStateMap())[questionId]
 
   return Boolean(
     questionState
@@ -176,6 +176,7 @@ function updateDailyGrowthStats(dateKey, nextDelta = {}) {
 }
 
 export function recordGrowthFromExamSubmission(resultPayload = {}) {
+  const isReview = resultPayload.mode === 'review'
   const perQuestionResults = Array.isArray(resultPayload.perQuestionResults)
     ? resultPayload.perQuestionResults
     : []
@@ -205,7 +206,7 @@ export function recordGrowthFromExamSubmission(resultPayload = {}) {
     }
 
     const previousState = questionStateMap[questionId] || buildQuestionState({}, { questionId, subject: item.subject })
-    const wasWrongBefore = Number(previousState.wrongCount || 0) > 0
+    const wasWrongBefore = isReview || Number(previousState.wrongCount || 0) > 0
     const nextStateFields = {
       questionId,
       subject: item.subject || previousState.subject || '',
@@ -228,9 +229,9 @@ export function recordGrowthFromExamSubmission(resultPayload = {}) {
       nextStateFields.correctStreak = wasWrongBefore
         ? Number(previousState.correctStreak || 0) + 1
         : Number(previousState.correctStreak || 0)
-      nextStateFields.wrongCount = Number(previousState.wrongCount || 0)
+      nextStateFields.wrongCount = Math.max(isReview ? 1 : 0, Number(previousState.wrongCount || 0))
 
-      if (wasWrongBefore && nextStateFields.correctStreak >= 2) {
+      if (wasWrongBefore && (isReview || previousState.masteryLevel === 'mastered' || nextStateFields.correctStreak >= 2)) {
         nextStateFields.masteryLevel = 'mastered'
 
         if (!previousState.clearedAt) {
@@ -245,7 +246,7 @@ export function recordGrowthFromExamSubmission(resultPayload = {}) {
       }
     } else if (item.status === 'wrong') {
       dailyDelta.wrongCount += 1
-      nextStateFields.wrongCount = Number(previousState.wrongCount || 0) + 1
+      nextStateFields.wrongCount = Math.max(isReview ? 1 : 0, Number(previousState.wrongCount || 0)) + 1
       nextStateFields.correctStreak = 0
       nextStateFields.masteryLevel = 'weak'
       nextStateFields.clearedAt = null
@@ -259,7 +260,7 @@ export function recordGrowthFromExamSubmission(resultPayload = {}) {
       subject: item.subject || '',
       isCorrect: item.status === 'correct',
       answeredAt: submittedAt,
-      mode: 'mock',
+      mode: isReview ? 'review' : 'mock',
     })
   })
 
@@ -272,12 +273,14 @@ export function getReviewHistory() {
   return getStoredReviewHistory()
 }
 
-export function getReviewStage(questionId) {
-  return getReviewHistory()[questionId]?.length || 0
+export function getReviewSnapshot() { return { history: getReviewHistory(), states: getQuestionStateMap() } }
+
+export function getReviewStage(questionId, context) {
+  return (context?.history || getReviewHistory())[questionId]?.length || 0
 }
 
-export function isMastered(questionId) {
-  return getReviewStage(questionId) >= EBBINGHAUS_INTERVALS.length || hasQuestionStateMastery(questionId)
+export function isMastered(questionId, context) {
+  return getReviewStage(questionId, context) >= EBBINGHAUS_INTERVALS.length || hasQuestionStateMastery(questionId, context)
 }
 
 export function markAsReviewed(questionId) {
@@ -302,9 +305,9 @@ export function markAsReviewed(questionId) {
   return nextReviewDates
 }
 
-export function getNextReviewDate(questionId, createdDate) {
-  const reviewStage = getReviewStage(questionId)
-  const reviewHistory = getReviewHistory()
+export function getNextReviewDate(questionId, createdDate, context) {
+  const reviewHistory = context?.history || getReviewHistory()
+  const reviewStage = reviewHistory[questionId]?.length || 0
   const baseDateKey = reviewStage > 0
     ? reviewHistory[questionId]?.[reviewStage - 1]
     : normalizeIsoDate(createdDate)
@@ -317,12 +320,12 @@ export function getNextReviewDate(questionId, createdDate) {
   return getLocalDateKey(nextReviewDate)
 }
 
-export function isReviewDueToday(questionId, createdDate) {
-  if (!questionId || isMastered(questionId)) {
+export function isReviewDueToday(questionId, createdDate, context) {
+  if (!questionId || isMastered(questionId, context)) {
     return false
   }
 
-  const nextReviewDate = getNextReviewDate(questionId, createdDate)
+  const nextReviewDate = getNextReviewDate(questionId, createdDate, context)
 
   if (!nextReviewDate) {
     return false
@@ -332,22 +335,23 @@ export function isReviewDueToday(questionId, createdDate) {
 }
 
 export function getDueForReview() {
+  const context = getReviewSnapshot()
   return getWrongBookItems()
     .filter((wrongItem) => {
       const questionKey = wrongItem.questionKey || wrongItem.key || getQuestionKey(wrongItem)
-      const createdDate = wrongItem.createdAt || wrongItem.answeredAt || wrongItem.date
-      return questionKey ? isReviewDueToday(questionKey, createdDate) : false
+      const createdDate = wrongItem.reviewResetAt || wrongItem.createdAt || wrongItem.answeredAt || wrongItem.date
+      return questionKey ? isReviewDueToday(questionKey, createdDate, context) : false
     })
     .map((wrongItem) => {
       const questionKey = wrongItem.questionKey || wrongItem.key || getQuestionKey(wrongItem)
-      const createdDate = wrongItem.createdAt || wrongItem.answeredAt || wrongItem.date
+      const createdDate = wrongItem.reviewResetAt || wrongItem.createdAt || wrongItem.answeredAt || wrongItem.date
 
       return {
         ...wrongItem,
         questionKey,
-        reviewStage: getReviewStage(questionKey),
-        nextReviewDate: getNextReviewDate(questionKey, createdDate),
-        mastered: isMastered(questionKey),
+        reviewStage: getReviewStage(questionKey, context),
+        nextReviewDate: getNextReviewDate(questionKey, createdDate, context),
+        mastered: isMastered(questionKey, context),
       }
     })
 }
@@ -520,16 +524,18 @@ export function getSubjectPowerStats() {
 }
 
 export function getWrongClearanceSummary() {
+  const context = getReviewSnapshot()
   const questionStateMap = getQuestionStateMap()
   const questionStates = Object.values(questionStateMap).filter(Boolean)
   const wrongItems = getWrongBookItems()
   const reviewMasteredIds = new Set(
     wrongItems
-      .filter((wrongItem) => isMastered(wrongItem.questionKey))
+      .filter((wrongItem) => isMastered(wrongItem.questionKey, context))
       .map((wrongItem) => wrongItem.questionKey),
   )
   const weekAgo = new Date()
   weekAgo.setDate(weekAgo.getDate() - 6)
+  weekAgo.setHours(0, 0, 0, 0)
   const weekAgoTime = weekAgo.getTime()
 
   const wrongQuestionStates = questionStates.filter((state) => Number(state.wrongCount || 0) > 0)

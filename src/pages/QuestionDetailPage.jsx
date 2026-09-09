@@ -14,7 +14,7 @@ import {
   toggleBookmark,
   updateWrongQuestionStatus,
 } from '../utils/storageUtils'
-import { getAnswerStatus } from '../utils/quizUtils'
+import { getAnswerStatus, calculateExamResult, getAcceptedAnswers } from '../utils/quizUtils'
 import { formatQuestionMetadata, getWrongQuestionDetail, normalizeQuestionKey } from '../utils/subjectUtils'
 import { getQuestionByKey } from '../utils/questionDataLoader'
 
@@ -134,17 +134,19 @@ function QuestionDetailPage() {
   const { subject, questionId } = useParams()
   const location = useLocation()
   const navigate = useNavigate()
-  const decodedQuestionId = decodeURIComponent(questionId || '')
-  const examResult = subject ? getExamResult(decodeURIComponent(subject)) : null
+  const decodedQuestionId = questionId || ''
+  const examResult = useMemo(() => subject ? getExamResult(subject) : null, [subject, questionId])
   const normalizedRouteKey = normalizeQuestionKey(decodedQuestionId)
-  const wrongBookItems = getWrongBookItems()
-  const resultQuestionItems = [
+  const wrongBookItems = useMemo(() => getWrongBookItems(), [questionId])
+  const resultQuestionItems = useMemo(() => [
+    ...(location.state?.question ? [location.state.question] : []),
+    ...calculateExamResult(examResult?.questionsSnapshot || [], examResult?.userAnswersSnapshot || {}).perQuestionResults,
     ...(Array.isArray(examResult?.perQuestionResults) ? examResult.perQuestionResults : []),
     ...(Array.isArray(examResult?.calculatedResult?.perQuestionResults)
       ? examResult.calculatedResult.perQuestionResults
       : []),
     ...(Array.isArray(examResult?.wrongQuestions) ? examResult.wrongQuestions : []),
-  ]
+  ], [examResult, location.state])
   const reviewedQuestion =
     resultQuestionItems.find((item) => normalizeQuestionKey(item) === normalizedRouteKey) || null
   const wrongBookItem =
@@ -220,25 +222,13 @@ function QuestionDetailPage() {
     },
   )
   const returnTarget =
-    location.state?.from === 'bookmarks'
+    location.state?.from === 'wrong-review-result'
+      ? { to: `/wrong-review/${encodeURIComponent(location.state.subject)}/result`, label: '返回複習結果' }
+      : location.state?.from === 'bookmarks'
       ? { to: '/bookmarks', label: '返回收藏題' }
-      : location.state?.from === 'results'
+      : location.state?.from === 'results' || Boolean(subject)
         ? { to: `/results/${encodeURIComponent(location.state?.subject || subject || '')}`, label: '返回測驗結果' }
         : { to: '/wrong-book', label: '返回錯題本' }
-
-  useEffect(() => {
-    if (!import.meta.env.DEV) {
-      return
-    }
-
-    console.log('[wrong-question-detail] route params', { subject, questionId })
-    console.log('[wrong-question-detail] decoded key', decodedQuestionId)
-    console.log('[wrong-question-detail] wrongItems count', wrongBookItems.length)
-    console.log('[wrong-question-detail] matched wrongItem', reviewedQuestion || wrongBookItem || null)
-    console.log('[wrong-question-detail] allQuestions count', question ? 1 : 0)
-    console.log('[wrong-question-detail] match method', question?._matchMethod || 'not_found')
-    console.log('[wrong-question-detail] final question object', question || null)
-  }, [subject, questionId, decodedQuestionId, wrongBookItems.length, reviewedQuestion, wrongBookItem, question])
 
   const handleResolveQuestion = () => {
     updateWrongQuestionStatus(questionKey, 'resolved')
@@ -260,7 +250,7 @@ function QuestionDetailPage() {
         />
         <div className="mx-auto flex max-w-4xl flex-col gap-6">
           <BackLink label={returnTarget.label} fallbackTo={returnTarget.to} />
-          <Navbar subtitle="Question Review" title="錯題詳情" />
+          <Navbar subtitle="Question Review" title="題目詳情" />
           <section className="rounded-[1.75rem] border border-slate-200 bg-white p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] md:p-8">
             <p className="text-slate-700">正在載入題目資料...</p>
           </section>
@@ -280,7 +270,7 @@ function QuestionDetailPage() {
         />
         <div className="mx-auto flex max-w-4xl flex-col gap-6">
           <BackLink label={returnTarget.label} fallbackTo={returnTarget.to} />
-          <Navbar subtitle="Question Review" title="錯題詳情" />
+          <Navbar subtitle="Question Review" title="題目詳情" />
           <section className="rounded-[1.75rem] border border-slate-200 bg-white p-6 shadow-[0_24px_60px_rgba(15,23,42,0.08)] md:p-8">
             <p className="text-slate-700">找不到原始題目資料，請確認題庫資料是否已載入</p>
             <div className="mt-4">
@@ -306,15 +296,15 @@ function QuestionDetailPage() {
         <BackLink label={returnTarget.label} fallbackTo={returnTarget.to} />
         <Navbar
           subtitle="Question Review"
-          title="錯題詳情"
+          title="題目詳情"
           actions={
             <>
               <Button as={Link} to={returnTarget.to} variant="secondary">
                 {returnTarget.label}
               </Button>
-              <Button type="button" variant="ghost" onClick={handleResolveQuestion}>
+              {wrongBookItem && <Button type="button" variant="ghost" onClick={handleResolveQuestion}>
                 我已經會了
-              </Button>
+              </Button>}
               <Button type="button" onClick={handleAddBookmark}>
                 {bookmarkIds.includes(questionKey) ? '取消收藏' : '加入收藏題'}
               </Button>
@@ -347,7 +337,7 @@ function QuestionDetailPage() {
           )}
 
           <div className="mt-6 grid gap-3">
-            {Object.entries(question.options).map(([key, value]) => {
+            {Object.entries(question.options || {}).map(([key, value]) => {
               const answerStatus = getAnswerStatus(question, userAnswer, key)
               const className =
                 answerStatus === 'correct'
@@ -405,7 +395,7 @@ function QuestionDetailPage() {
               </span>
             </p>
             <QuestionRichText
-              text={question.options[question.answer]}
+              text={getAcceptedAnswers(question.answer).map((key) => `${key}. ${question.options?.[key] || ''}`).join('\n')}
               alt={`${question.id}-answer`}
               textClassName="whitespace-pre-line leading-relaxed text-slate-700"
               imageClassName="max-h-[20rem] w-full object-contain"

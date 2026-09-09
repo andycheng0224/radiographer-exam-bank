@@ -35,7 +35,7 @@ function SettingsPage() {
   const commitDailyGoal = (value) => {
     const parsed = Number(value)
 
-    if (!Number.isFinite(parsed) || parsed < MIN_DAILY_GOAL || parsed > MAX_DAILY_GOAL) {
+    if (!Number.isInteger(parsed) || parsed < MIN_DAILY_GOAL || parsed > MAX_DAILY_GOAL) {
       setDailyGoalError(`請輸入 ${MIN_DAILY_GOAL} 到 ${MAX_DAILY_GOAL} 之間的題數`)
       return
     }
@@ -85,7 +85,7 @@ function SettingsPage() {
               </p>
             </div>
             {savedMessage ? (
-              <span className="inline-flex w-fit rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
+              <span role="status" className="inline-flex w-fit rounded-full border border-emerald-200 bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-700">
                 {savedMessage}
               </span>
             ) : null}
@@ -113,6 +113,7 @@ function SettingsPage() {
               <div className="flex items-center rounded-xl border border-slate-200 bg-slate-50">
                 <input
                   type="number"
+                  aria-label="每日目標題數"
                   min={MIN_DAILY_GOAL}
                   max={MAX_DAILY_GOAL}
                   value={dailyGoalInput}

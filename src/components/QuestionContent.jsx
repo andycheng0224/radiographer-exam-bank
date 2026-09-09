@@ -1,4 +1,15 @@
+import { useState } from 'react'
 const IMAGE_PLACEHOLDER_PATTERN = /\{\{image:([^}]+)\}\}/g
+
+function QuestionImage({ src, alt, className, allowRetry = true }) {
+  const [failed, setFailed] = useState(false)
+  const [attempt, setAttempt] = useState(0)
+  if (failed) return <div role="status" className="p-4 text-sm text-slate-700">
+    附圖載入失敗，請確認網路後重試。
+    {allowRetry && <button type="button" className="ml-2 font-bold underline" onClick={(event) => { event.stopPropagation(); setFailed(false); setAttempt((value) => value + 1) }}>重試圖片</button>}
+  </div>
+  return <img key={`${src}-${attempt}`} src={src} alt={alt || '題目附圖'} loading="lazy" decoding="async" onError={() => setFailed(true)} className={`question-image ${className}`} />
+}
 
 export function resolveQuestionImagePath(rawPath = '') {
   const normalizedPath = String(rawPath).replace(/\\/g, '/').trim()
@@ -61,21 +72,31 @@ function buildImageTextSegments(text = '') {
 export function QuestionRichText({
   text,
   alt,
+  allowRetry = true,
   textClassName = 'whitespace-pre-line leading-relaxed text-slate-900',
   imageClassName = 'w-full object-contain',
 }) {
-  const segments = buildImageTextSegments(text)
+  // PDF extraction can split one figure into consecutive horizontal strips.
+  // Keep adjacent image placeholders together, with no artificial gaps or crops.
+  const segments = []
+  for (const segment of buildImageTextSegments(text)) {
+    if (segment.type === 'text' && !segment.value.trim()) continue
+    if (segment.type === 'image') {
+      if (segments.at(-1)?.type === 'images') segments.at(-1).images.push(segment)
+      else segments.push({ type: 'images', images: [segment] })
+    } else segments.push(segment)
+  }
 
   return (
     <div className="space-y-3">
       {segments.map((segment, index) => {
-        if (segment.type === 'image') {
+        if (segment.type === 'images') {
           return (
             <figure
               key={`${alt}-image-${index}`}
-              className="overflow-hidden rounded-2xl border border-slate-200 bg-white"
+              className="mx-auto w-fit max-w-full overflow-hidden border border-slate-200 bg-white"
             >
-              <img src={segment.src} alt={alt} className={imageClassName} />
+              {segment.images.map((part, imageIndex) => <QuestionImage allowRetry={allowRetry} key={`${part.src}-${imageIndex}`} src={part.src} alt={alt} className={imageClassName} />)}
             </figure>
           )
         }
@@ -98,13 +119,13 @@ function QuestionContent({ question }) {
   return (
     <div className="space-y-5">
       <div className="text-xl font-bold md:text-2xl">
-        <QuestionRichText text={question.question} alt={question.question} />
+        <QuestionRichText text={question.question || question.questionText || question.stem} alt="題目附圖" />
       </div>
 
       {question.image && (
         <figure className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
-          <img
-            src={resolveQuestionImagePath(question.image.src)}
+          <QuestionImage
+            src={resolveQuestionImagePath(typeof question.image === 'string' ? question.image : question.image.src)}
             alt={question.image.alt || question.question}
             className="w-full object-contain"
           />

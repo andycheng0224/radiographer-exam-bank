@@ -3,6 +3,7 @@ import { Link, Navigate, useLocation, useParams } from 'react-router-dom'
 import BackLink from '../components/BackLink'
 import Button from '../components/Button'
 import Navbar from '../components/Navbar'
+import { QuestionRichText } from '../components/QuestionContent'
 import ResultSummary from '../components/ResultSummary'
 import SeoMeta from '../components/SeoMeta'
 import { extractQuestionTags, getExamResult, getQuestionKey, saveExamResult } from '../utils/storageUtils'
@@ -13,8 +14,8 @@ import { getStudyActionRecommendation, getTodayFeedbackSummary } from '../utils/
 function ResultPage() {
   const location = useLocation()
   const { subject: subjectParam } = useParams()
-  const subject = decodeURIComponent(subjectParam || '')
-  const resultPayload = location.state || getExamResult(subject)
+  const subject = subjectParam || ''
+  const resultPayload = useMemo(() => location.state || getExamResult(subject), [location.state, subject])
   const [statusFilter, setStatusFilter] = useState('all')
   const retrySearch = resultPayload?.startYear && resultPayload?.endYear
     ? `?startYear=${resultPayload.startYear}&endYear=${resultPayload.endYear}`
@@ -26,17 +27,13 @@ function ResultPage() {
     }
   }, [location.state, subject])
 
-  if (!resultPayload) {
-    return <Navigate to="/" replace />
-  }
-
   const calculatedResult = useMemo(() => {
     if (resultPayload?.calculatedResult?.perQuestionResults?.length) {
       return resultPayload.calculatedResult
     }
 
-    const questionsSnapshot = resultPayload.questionsSnapshot || resultPayload.questions || []
-    const userAnswersSnapshot = resultPayload.userAnswersSnapshot || resultPayload.answers || {}
+    const questionsSnapshot = resultPayload?.questionsSnapshot || resultPayload?.questions || []
+    const userAnswersSnapshot = resultPayload?.userAnswersSnapshot || resultPayload?.answers || {}
     return calculateExamResult(questionsSnapshot, userAnswersSnapshot)
   }, [resultPayload])
 
@@ -74,33 +71,7 @@ function ResultPage() {
     return perQuestionResults.filter((question) => question.status === statusFilter)
   }, [perQuestionResults, statusFilter])
 
-  useEffect(() => {
-    if (!import.meta.env.DEV) {
-      return
-    }
-
-    console.log('[result-page] questions.length', perQuestionResults.length)
-    console.log(
-      '[result-page] first 10 userAnswers',
-      perQuestionResults.slice(0, 10).map((item) => [item.questionKey, item.userAnswer]),
-    )
-    console.log('[result-page] first 10 perQuestionResults', perQuestionResults.slice(0, 10))
-    console.log('[result-page] counts', {
-      correctCount: summary.correctCount,
-      wrongCount: summary.wrongCount,
-      unansweredCount: summary.unansweredCount,
-    })
-    console.log('[result-page] invariant', invariantCheck)
-
-    if (!invariantCheck) {
-      console.error('[result-page] invariant failed', {
-        totalQuestions: summary.totalCount,
-        correctCount: summary.correctCount,
-        wrongCount: summary.wrongCount,
-        unansweredCount: summary.unansweredCount,
-      })
-    }
-  }, [perQuestionResults, summary, invariantCheck])
+  if (!resultPayload) return <Navigate to="/radiographer" replace />
 
   if (!invariantCheck) {
     return (
@@ -248,9 +219,9 @@ function ResultPage() {
                     <p className="text-sm font-semibold text-slate-700">
                       測驗第 {question._examIndex} 題｜{question._metadataLabel}
                     </p>
-                    <h2 className="mt-2 text-lg font-bold leading-relaxed text-slate-900">
-                      {question._displayQuestionText}
-                    </h2>
+                    <div className="mt-2 text-lg font-bold leading-relaxed text-slate-900">
+                      <QuestionRichText text={question._displayQuestionText} alt="題目附圖" />
+                    </div>
                   </div>
 
                   <span
@@ -286,7 +257,7 @@ function ResultPage() {
                 <Button
                   as={Link}
                   to={`/results/${encodeURIComponent(subject)}/question/${encodeURIComponent(question.questionKey || getQuestionKey(question) || question.id)}`}
-                  state={{ from: 'results', subject }}
+                  state={{ from: 'results', subject, question }}
                   variant="secondary"
                   className="mt-4"
                 >

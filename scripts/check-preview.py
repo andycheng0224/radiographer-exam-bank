@@ -50,12 +50,17 @@ def image_refs(question):
             for item in value:
                 yield from strings(item)
 
-    for key in ("question", "questionText", "stem", "options", "explanation"):
-        for text in strings(question.get(key)):
-            yield from IMAGE_MARKER.findall(text)
+    # The generator collects inline markers anywhere in the normalized record.
+    for text in strings(question):
+        yield from IMAGE_MARKER.findall(text)
     image = question.get("image")
     if image:
         yield image.get("src", "") if isinstance(image, dict) else image
+    images = question.get("images")
+    if isinstance(images, list):
+        for entry in images:
+            if isinstance(entry, dict) and entry.get("path"):
+                yield entry["path"]
 
 
 def inspect_preview(root):

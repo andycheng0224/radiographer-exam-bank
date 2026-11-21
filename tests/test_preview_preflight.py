@@ -43,6 +43,23 @@ class PreviewPreflightTests(unittest.TestCase):
         self.assertEqual(result["referencedImagesFromReadableShards"], 4)
         self.assertEqual(result["files"], 9)
 
+    def test_requires_missing_structured_only_images_and_deduplicates_them(self):
+        self.write(self.shard, [{"images": [
+            {"path": "assets/只在欄位.png"}, {"path": "/uploads/只在欄位.png"},
+        ]}])
+        result = preflight.inspect_preview(self.output)
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["issues"]["referenced-image-missing"], 1)
+        self.assertEqual(result["examples"]["referenced-image-missing"], ["uploads/只在欄位.png"])
+        self.write("uploads/只在欄位.png", "fixture")
+        self.assertTrue(preflight.inspect_preview(self.output)["passed"])
+
+    def test_checks_inline_references_outside_the_previous_field_allowlist(self):
+        self.write(self.shard, [{"supplement": [{"text": "{{image:extra.png}}"}]}])
+        result = preflight.inspect_preview(self.output)
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["examples"]["referenced-image-missing"], ["uploads/extra.png"])
+
     def test_rejects_missing_and_nonlocal_images_empty_file_and_oversize(self):
         self.write(self.shard, [{
             "question": "{{image:missing.png}} {{image:https://example.invalid/a.png}}",

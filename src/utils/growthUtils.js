@@ -1,3 +1,4 @@
+import { applyGrowthDailyCorrections, applyGrowthStateCorrections } from './growthCorrections.js'
 import {
   calculateStreak,
   getCurrentEffectiveUserId,
@@ -87,7 +88,7 @@ function writeGrowthDailyStatsMap(value) {
 
 function getQuestionStateMap() {
   const parsed = readStorageValue(QUESTION_STATE_KEY, {})
-  return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  return applyGrowthStateCorrections(parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {})
 }
 
 function writeQuestionStateMap(value) {
@@ -201,7 +202,7 @@ export function recordGrowthFromExamSubmission(resultPayload = {}) {
   perQuestionResults.forEach((item) => {
     const questionId = item.questionKey || getQuestionKey(item) || item.id || ''
 
-    if (!questionId || !item.isAnswered) {
+    if (!questionId || !item.isAnswered || item.scoreStatus === 'all-credit') {
       return
     }
 
@@ -261,6 +262,7 @@ export function recordGrowthFromExamSubmission(resultPayload = {}) {
       isCorrect: item.status === 'correct',
       answeredAt: submittedAt,
       mode: isReview ? 'review' : 'mock',
+      sessionId:resultPayload.sessionId || '',gradingVersion:resultPayload.gradingVersion || '',scoreStatus:item.scoreStatus,
     })
   })
 
@@ -276,10 +278,12 @@ export function getReviewHistory() {
 export function getReviewSnapshot() { return { history: getReviewHistory(), states: getQuestionStateMap() } }
 
 export function getReviewStage(questionId, context) {
+  if ((context?.states || getQuestionStateMap())[questionId]?.gradingNeedsReview) return 0
   return (context?.history || getReviewHistory())[questionId]?.length || 0
 }
 
 export function isMastered(questionId, context) {
+  if ((context?.states || getQuestionStateMap())[questionId]?.gradingNeedsReview) return false
   return getReviewStage(questionId, context) >= EBBINGHAUS_INTERVALS.length || hasQuestionStateMastery(questionId, context)
 }
 
@@ -307,7 +311,7 @@ export function markAsReviewed(questionId) {
 
 export function getNextReviewDate(questionId, createdDate, context) {
   const reviewHistory = context?.history || getReviewHistory()
-  const reviewStage = reviewHistory[questionId]?.length || 0
+  const reviewStage = (context?.states || getQuestionStateMap())[questionId]?.gradingNeedsReview ? 0 : reviewHistory[questionId]?.length || 0
   const baseDateKey = reviewStage > 0
     ? reviewHistory[questionId]?.[reviewStage - 1]
     : normalizeIsoDate(createdDate)
@@ -358,7 +362,7 @@ export function getDueForReview() {
 
 function getMergedDailyStatsMap() {
   const baseStudyStats = getStudyStats()
-  const growthDailyStats = getGrowthDailyStatsMap()
+  const growthDailyStats = applyGrowthDailyCorrections(getGrowthDailyStatsMap())
   const allDateKeys = [...new Set([...Object.keys(baseStudyStats), ...Object.keys(growthDailyStats)])]
   const mergedMap = {}
 
@@ -480,7 +484,7 @@ export function getSubjectPowerStats() {
 
   results.forEach((result) => {
     const subject = result.subject || ''
-    const answeredCount = Number(result.correctCount || 0) + Number(result.wrongCount || 0)
+    const answeredCount = Number.isFinite(result.masteryAnsweredCount) ? result.masteryAnsweredCount : Number(result.correctCount || 0) + Number(result.wrongCount || 0)
 
     if (!subject || answeredCount <= 0) {
       return
@@ -496,7 +500,7 @@ export function getSubjectPowerStats() {
     subjectMap.set(subject, {
       subject,
       answeredCount: current.answeredCount + answeredCount,
-      correctCount: current.correctCount + Number(result.correctCount || 0),
+      correctCount: current.correctCount + (Number.isFinite(result.masteryCorrectCount) ? result.masteryCorrectCount : Number(result.correctCount || 0)),
       wrongCount: current.wrongCount + Number(result.wrongCount || 0),
     })
   })

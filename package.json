@@ -8,11 +8,15 @@
   },
   "scripts": {
     "dev": "npm run build:data && vite",
-    "build:data": "node scripts/build-question-data.mjs",
-    "build": "npm run build:data && vite build",
+    "build:data": "node scripts/bounded-run.mjs 300 node scripts/build-question-data.mjs",
+    "build": "node scripts/bounded-run.mjs 600 npm run build:unbounded",
     "preview": "vite preview",
-    "test": "node --test tests/*.test.mjs",
-    "check": "node scripts/check-source.mjs && npm test"
+    "test": "node scripts/bounded-run.mjs 240 node --test tests/*.test.mjs",
+    "check": "node scripts/check-source.mjs && npm test",
+    "build:unbounded": "npm run build:data && vite build",
+    "import:official": "node scripts/bounded-run.mjs 300 python3 scripts/import-moex.py",
+    "update:official": "node scripts/bounded-run.mjs 600 python3 scripts/scheduled-moex-update.py",
+    "watch:official": "python3 scripts/scheduled-moex-update.py --watch"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.4",

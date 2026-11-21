@@ -38,3 +38,12 @@ export function getBrowserStorageKeys() {
   try { keys = Object.keys(window.localStorage) } catch { reportFailure() }
   return [...new Set([...keys, ...pending.keys()])].filter((key) => readBrowserStorage(key) !== null)
 }
+
+// Retry only the current user's pending values, preserving every failed value in memory.
+export function retryPendingStorage(suffix) {
+  for(const [key,value] of [...pending]) if(key.endsWith(suffix)) {
+    if(value===null) removeBrowserStorage(key)
+    else writeBrowserStorage(key,value)
+  }
+  return {ok:![...pending.keys()].some(key=>key.endsWith(suffix)),pending:[...pending.keys()].filter(key=>key.endsWith(suffix)).length}
+}

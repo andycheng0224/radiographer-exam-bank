@@ -1,9 +1,11 @@
-import { useEffect } from 'react'
+import { useEffect, lazy, Suspense } from 'react'
 import ErrorBoundary from './components/ErrorBoundary'
 import StorageNotice from './components/StorageNotice'
 import NotFoundPage from './components/NotFoundPage'
 import { Route, Routes, useLocation } from 'react-router-dom'
 import HomePage from './pages/HomePage'
+import StudyPage from './pages/StudyPage'
+import PracticeSelectPage from './pages/PracticeSelectPage'
 import QuizPage from './pages/QuizPage'
 import ResultPage from './pages/ResultPage'
 import WrongBookPage from './pages/WrongBookPage'
@@ -17,6 +19,9 @@ import WrongReviewSelectPage from './pages/WrongReviewSelectPage'
 import WrongReviewQuizPage from './pages/WrongReviewQuizPage'
 import WrongReviewResultPage from './pages/WrongReviewResultPage'
 import SettingsPage from './pages/SettingsPage'
+
+const UncertainReviewPage = lazy(() => import('./pages/UncertainReviewPage'))
+const SourceSearchPage = lazy(() => import('./pages/SourceSearchPage'))
 
 const publicPageConfigs = {
   features: {
@@ -147,6 +152,10 @@ function App() {
       <Route path="/" element={<PlatformHomePage />} />
       <Route path="/exams" element={<ExamCatalogPage />} />
       <Route path="/radiographer" element={<HomePage />} />
+      <Route path="/sources" element={<Suspense fallback={<p>載入來源摘要…</p>}><SourceSearchPage /></Suspense>} />
+      <Route path="/uncertain" element={<Suspense fallback={<p>載入猶豫題…</p>}><UncertainReviewPage /></Suspense>} />
+      <Route path="/study" element={<StudyPage />} />
+      <Route path="/practice" element={<PracticeSelectPage />} />
       <Route path="/settings" element={<SettingsPage />} />
       <Route path="/features" element={<PublicInfoPage {...publicPageConfigs.features} />} />
       <Route path="/radiographer-exam" element={<PublicInfoPage {...publicPageConfigs.radiographerExam} />} />

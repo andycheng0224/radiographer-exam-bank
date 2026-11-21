@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { reconcileSavedGrading } from '../utils/reconcileGrading'
 import { Link } from 'react-router-dom'
 import BackLink from '../components/BackLink'
 import Button from '../components/Button'
@@ -10,8 +12,6 @@ import {
   getSubjectPowerStats,
 } from '../utils/growthUtils'
 import {
-  getStudyActionRecommendation,
-  getTodayFeedbackSummary,
   getWrongQuestionStatusSummary,
 } from '../utils/recommendationUtils'
 
@@ -26,11 +26,12 @@ function CoreMetric({ label, value, hint }) {
 }
 
 function GrowthPage() {
+  const [migrationMessage,setMigrationMessage]=useState(''),[migrating,setMigrating]=useState(false)
+  const migrate=async()=>{setMigrating(true);try{const r=await reconcileSavedGrading();setMigrationMessage(`已核對 ${r.scanned} 份現存作答快照；每日統計修正 ${r.statsUpdated} 份、成長紀錄修正 ${r.growthUpdated} 題、插件事件修正 ${r.pluginUpdated} 筆。${r.preserved} 份缺少統計證據，保留原值。`)}catch(error){setMigrationMessage(error.message)}finally{setMigrating(false)}}
+
   const sevenDayTrend = getSevenDayGrowthData()
   const subjectPower = getSubjectPowerStats()
   const wrongSummary = getWrongQuestionStatusSummary()
-  const recommendation = getStudyActionRecommendation()
-  const todayFeedback = getTodayFeedbackSummary()
   const weakestSubject = subjectPower.weakestSubject
   const subjectRows = EXAM_SUBJECTS.map((subject) => {
     const row = subjectPower.rows.find((item) => item.subject === subject.name)
@@ -52,7 +53,8 @@ function GrowthPage() {
       />
       <div className="mx-auto flex max-w-6xl flex-col gap-5">
         <BackLink label="返回首頁" fallbackTo="/" />
-        <Navbar subtitle="我的成長" title="下一步該練什麼？" />
+        <Navbar subtitle="我的成長" title="學習紀錄" /><p className="rounded-xl bg-amber-50 p-4 text-amber-900">官方更正只依現存作答快照、收據與可唯一對應的紀錄核對；沒有證據的舊資料、XP 與複習權重保留歷史值。來源標籤不等於專家核准或精熟判定。</p>
+        <Button disabled={migrating} onClick={migrate}>{migrating ? '核對中…' : '核對已保存作答的官方更正'}</Button>{migrationMessage && <p role="status">{migrationMessage}</p>}
         <StudyStatusStrip compact />
 
         <section className="grid gap-3 md:grid-cols-3">
@@ -62,38 +64,10 @@ function GrowthPage() {
             value={sevenDayTrend.totalAnswered > 0 ? `${sevenDayTrend.averageAccuracy}%` : '—'}
             hint={sevenDayTrend.totalAnswered > 0 ? '最近 7 天平均' : '完成作答後顯示'}
           />
-          <CoreMetric label="待複習錯題" value={`${wrongSummary.dueWrongCount} 題`} hint="今天建議先處理" />
+          <CoreMetric label="待複習錯題" value={`${wrongSummary.dueWrongCount} 題`} hint="依現有複習紀錄計算" />
         </section>
 
-        <section className="rounded-2xl border border-blue-200 bg-blue-50 p-5 shadow-sm md:p-6">
-          <h2 className="text-xl font-black text-slate-950">下一步建議</h2>
-          <p className="mt-3 text-sm leading-7 text-slate-700">{recommendation.description}</p>
-          <div className="mt-5 flex flex-col gap-3 sm:flex-row">
-            <Button as={Link} to={recommendation.primaryActionPath}>
-              {recommendation.primaryActionLabel}
-            </Button>
-            {recommendation.secondaryActionPath && recommendation.secondaryActionLabel ? (
-              <Button as={Link} to={recommendation.secondaryActionPath} variant="secondary">
-                {recommendation.secondaryActionLabel}
-              </Button>
-            ) : null}
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h2 className="text-lg font-black text-slate-950">今日作答回饋</h2>
-          <p className="mt-3 text-sm leading-7 text-slate-700">{todayFeedback.summary}</p>
-          {todayFeedback.focusItems.length > 0 ? (
-            <div className="mt-3 flex flex-wrap gap-2">
-              {todayFeedback.focusItems.map((item) => (
-                <span key={item} className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700">
-                  {item}
-                </span>
-              ))}
-            </div>
-          ) : null}
-          <p className="mt-3 text-sm font-semibold text-slate-700">{todayFeedback.nextStep}</p>
-        </section>
+        <div><Button as={Link} to="/study" variant="secondary">主動查看 OnTrack 學習建議</Button></div>
 
         <section className="grid gap-5 lg:grid-cols-[0.8fr_1.2fr]">
           <article className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">

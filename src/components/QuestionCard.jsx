@@ -1,4 +1,5 @@
 import Button from './Button'
+import { getAnswerRule, normalizeSelection } from '../utils/answerRules'
 import QuestionContent, { QuestionRichText } from './QuestionContent'
 import { formatQuestionMetadata } from '../utils/subjectUtils'
 
@@ -16,6 +17,7 @@ function QuestionCard({
   showFlag = true,
   modeLabel = '單科限時測驗',
 }) {
+  const multiple = getAnswerRule(question).acceptedSets.some((set) => set.length > 1)
   const metadataLabel = formatQuestionMetadata(question, {
     prefix: '來源：',
     fallback: '來源資訊未提供',
@@ -31,7 +33,7 @@ function QuestionCard({
           </span>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-3">
-          <span className="text-sm text-slate-500">單選題</span>
+          <span className="text-sm text-slate-500">{multiple ? '可複選（依更正答案判分）' : '單選題'}</span>
           {showFlag && (
             <Button
               type="button"
@@ -58,7 +60,7 @@ function QuestionCard({
 
       <div className="mt-6 grid gap-3">
         {Object.entries(question.options || {}).map(([key, value]) => {
-          const isSelected = selectedAnswer === key
+          const isSelected = normalizeSelection(selectedAnswer).includes(key)
           const buttonClass = isSelected
             ? 'border-sky-500 bg-sky-50 text-sky-900'
             : 'border-slate-200 bg-white hover:border-sky-300 hover:bg-sky-50'
@@ -67,7 +69,7 @@ function QuestionCard({
             <button
               key={key}
               type="button"
-              onClick={() => onSelectAnswer(key)}
+              onClick={() => onSelectAnswer(multiple ? normalizeSelection(isSelected ? selectedAnswer.replace(key, '') : selectedAnswer + key) : key)}
               aria-pressed={isSelected}
               aria-label={`選項 ${key}`}
               className={`rounded-2xl border px-4 py-4 text-left text-base font-medium transition ${buttonClass}`}

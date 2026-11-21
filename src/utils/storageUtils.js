@@ -1,3 +1,4 @@
+import { sameReceipt } from './gradingReceipt.js'
 import { readBrowserStorage, writeBrowserStorage, removeBrowserStorage, getBrowserStorageKeys } from './browserStorage.js'
 const WRONG_BOOK_KEY = 'radiographer_exam_bank_wrong_book'
 const BOOKMARK_KEY = 'radiographer_exam_bank_bookmarks'
@@ -40,6 +41,9 @@ const USER_PROGRESS_BASE_KEYS = [
   'radiographer_exam_bank_active_quiz',
   'radiographer_exam_bank_active_wrong_review',
   'radiographer_exam_bank_wrong_review_result',
+  'radiographer_exam_bank_ontrack_v1',
+  'radiographer_exam_bank_advice_v1',
+  'radiographer_exam_bank_growth_corrections_v1',
 ]
 
 function canUseStorage() {
@@ -68,7 +72,7 @@ function writeRawStorageValue(key, value) {
     return
   }
 
-  writeBrowserStorage(key, JSON.stringify(value))
+  return writeBrowserStorage(key, JSON.stringify(value))
 }
 
 function normalizeReviewHistoryMap(value) {
@@ -247,11 +251,11 @@ export function readUserScopedStorageValue(key, fallbackValue, options = {}) {
 function writeStorageValue(key, value, options = {}) {
   const { scoped = true } = options
   const targetKey = scoped ? getScopedStorageKey(key) : key
-  writeRawStorageValue(targetKey, value)
+  return writeRawStorageValue(targetKey, value)
 }
 
 export function writeUserScopedStorageValue(key, value, options = {}) {
-  writeStorageValue(key, value, options)
+  return writeStorageValue(key, value, options)
 }
 
 function readStorageArray(key, options = {}) {
@@ -260,7 +264,7 @@ function readStorageArray(key, options = {}) {
 }
 
 function writeStorageArray(key, value, options = {}) {
-  writeStorageValue(key, value, options)
+  return writeStorageValue(key, value, options)
 }
 
 function getLocalDateKey(date = new Date()) {
@@ -442,6 +446,11 @@ function normalizeSingleSubjectResult(result) {
 
   return {
     type: 'single_subject',
+    sessionId: result.sessionId || '',
+    gradingVersion: result.gradingVersion || '',
+    gradingHistory: result.gradingHistory || [],
+    masteryAnsweredCount: result.masteryAnsweredCount,
+    masteryCorrectCount: result.masteryCorrectCount,
     subject: result.subject || '',
     date: result.date || getLocalDateKey(),
     totalQuestions,
@@ -1593,12 +1602,16 @@ export function getTodayStats() {
 }
 
 export function updateTodayStats({
+  submissionId,
+  submissionPayload,
+  gradingReceipt,
   answeredCountDelta = 0,
   correctCountDelta = 0,
   wrongCountDelta = 0,
 } = {}) {
   const todayKey = getLocalDateKey()
   const studyStats = getStudyStatsMap()
+  if (submissionId && Object.values(studyStats).some((day) => day.submissionIds?.includes(submissionId))) return null
   const currentStats = studyStats[todayKey] || {
     answeredCount: 0,
     correctCount: 0,
@@ -1606,6 +1619,10 @@ export function updateTodayStats({
   }
 
   studyStats[todayKey] = {
+    ...currentStats,
+    submissionIds: [...(currentStats.submissionIds || []), ...(submissionId ? [submissionId] : [])],
+    submissionPayloads: { ...currentStats.submissionPayloads, ...(submissionId && submissionPayload ? {[submissionId]: submissionPayload} : {}) },
+    submissionGrades: { ...currentStats.submissionGrades, ...(submissionId && gradingReceipt ? {[submissionId]: gradingReceipt} : {}) },
     answeredCount: Math.max(0, Number(currentStats.answeredCount || 0) + Number(answeredCountDelta || 0)),
     correctCount: Math.max(0, Number(currentStats.correctCount || 0) + Number(correctCountDelta || 0)),
     wrongCount: Math.max(0, Number(currentStats.wrongCount || 0) + Number(wrongCountDelta || 0)),
@@ -1749,4 +1766,74 @@ export function clearCurrentUserProgress(userId = getCurrentEffectiveUserId()) {
     clearedKeys,
     clearedCount: clearedKeys.length,
   }
+}
+
+// One localStorage write contains both count delta and revision receipt; retries are idempotent.
+// No receipt means the historical contribution is unknown and must not be guessed.
+export function reconcileSubmissionStats(sessionId, next) {
+  if (!sessionId || !next?.rows?.length) return { status:'insufficient-evidence' }
+  const all = getStudyStatsMap()
+  const entry = Object.entries(all).find(([,day]) => day.submissionIds?.includes(sessionId))
+  if (!entry) return { status:'untracked-submission' }
+  const [date,day] = entry, previous = day.submissionGrades?.[sessionId]
+  if (!previous) return { status:'missing-original-receipt' }
+  if (sameReceipt(previous,next)) return { status:'current' }
+  if (!Array.isArray(previous.rows) || JSON.stringify(previous.rows.map(q=>q.id).sort()) !== JSON.stringify(next.rows.map(q=>q.id).sort())) return {status:'snapshot-mismatch'}
+  const deltas = Object.fromEntries(['answeredCount','correctCount','wrongCount'].map(key=>[key, next[key]-previous[key]]))
+  if (Object.entries(deltas).some(([key,delta])=>!Number.isFinite(delta) || Number(day[key] || 0)+delta < 0)) return {status:'inconsistent-totals'}
+  all[date] = {...day,...Object.fromEntries(Object.entries(deltas).map(([k,v])=>[k,Number(day[k]||0)+v])),
+    submissionGrades:{...day.submissionGrades,[sessionId]:next},
+    gradingCorrections:[...(day.gradingCorrections || []),{sessionId,previous,next,appliedAt:new Date().toISOString()}]}
+  writeStudyStatsMap(all)
+  return {status:'updated',deltas,date}
+}
+export function reconcileScoreHistory(sessionId, result, version) {
+  if (!sessionId) return 0
+  const rows = readStorageArray(MOCK_EXAM_RESULTS_KEY)
+  let changed=0
+  const next=rows.map(row=>{
+    if(row.sessionId !== sessionId || (row.gradingVersion===version && row.score===result.score && Number.isFinite(row.masteryAnsweredCount) && Number.isFinite(row.masteryCorrectCount))) return row
+    changed++
+    const previous={score:row.score,correctCount:row.correctCount,wrongCount:row.wrongCount,unansweredCount:row.unansweredCount,gradingVersion:row.gradingVersion}
+    return {...row,score:result.score,correctCount:result.correctCount,wrongCount:result.wrongCount,unansweredCount:result.unansweredCount,gradingVersion:version,
+      masteryAnsweredCount:result.perQuestionResults.filter(q=>q.isAnswered&&q.scoreStatus==='graded').length,
+      masteryCorrectCount:result.perQuestionResults.filter(q=>q.isAnswered&&q.isCorrect&&q.scoreStatus==='graded').length,
+      wrongQuestions:result.perQuestionResults.filter(q=>q.status==='wrong'),gradingHistory:[...(row.gradingHistory||[]),{previous,appliedAt:new Date().toISOString()}]}
+  })
+  if(changed) writeStorageArray(MOCK_EXAM_RESULTS_KEY,next)
+  return changed
+}
+
+// The compact submission identity shares the statistics write; no duplicate question text.
+export function getSubmissionRecord(sessionId) {
+  for (const [date,day] of Object.entries(getStudyStatsMap())) {
+    if(day.submissionIds?.includes(sessionId)) return {date, receipt:day.submissionGrades?.[sessionId], payload:day.submissionPayloads?.[sessionId]}
+  }
+  return null
+}
+export function getSavedSubmissionSnapshots() {
+  const review = readUserScopedStorageValue('radiographer_exam_bank_wrong_review_result',null)
+  return [...getStoredExamResultPayloads(), ...(review ? [review] : [])]
+}
+
+// Committed receipt and metadata share the single statistics write. No separate queue write can be lost.
+export function getCommittedSubmissionRecords() {
+  return Object.entries(getStudyStatsMap()).flatMap(([date,day]) => (day.submissionIds || []).map(sessionId => ({
+    date, sessionId, payload:day.submissionPayloads?.[sessionId], receipt:day.submissionGrades?.[sessionId],
+  })))
+}
+
+// Union of explicit flags from committed attempts, including correct answers. Reading never writes counts.
+export function getUncertainQuestionIds() {
+  return [...new Set(getCommittedSubmissionRecords().flatMap(({payload}) =>
+    Array.isArray(payload?.flaggedKeys) ? payload.flaggedKeys.filter(key => typeof key==='string' && payload.questionKeys?.includes(key)) : []))]
+}
+
+export function getLatestSubmittedAnswer(questionKey, {flaggedOnly=false} = {}) {
+  const records=getCommittedSubmissionRecords().filter(({payload}) => payload?.questionKeys?.includes(questionKey) && (!flaggedOnly || payload.flaggedKeys?.includes(questionKey)) && Number.isFinite(payload.submittedAt))
+  records.sort((a,b)=>b.payload.submittedAt-a.payload.submittedAt)
+  const payload=records[0]?.payload
+  if(!payload) return null
+  const answer=payload.userAnswersSnapshot?.[questionKey]
+  return {answer:typeof answer==='string' && /^[A-D]{0,4}$/.test(answer)?answer:'',submittedAt:payload.submittedAt,sessionId:payload.sessionId}
 }

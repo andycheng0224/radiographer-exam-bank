@@ -1,3 +1,6 @@
+import { selectionUrl } from '../utils/selectionNavigation'
+import ExplanationSections from '../components/ExplanationSections'
+import { answerRuleLabel, getAnswerRule } from '../utils/answerRules'
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom'
 import BackLink from '../components/BackLink'
@@ -9,6 +12,7 @@ import {
   extractQuestionTags,
   getBookmarkIds,
   getExamResult,
+  getLatestSubmittedAnswer,
   getQuestionKey,
   getWrongBookItems,
   toggleBookmark,
@@ -17,114 +21,6 @@ import {
 import { getAnswerStatus, calculateExamResult, getAcceptedAnswers } from '../utils/quizUtils'
 import { formatQuestionMetadata, getWrongQuestionDetail, normalizeQuestionKey } from '../utils/subjectUtils'
 import { getQuestionByKey } from '../utils/questionDataLoader'
-
-function getExplanationSource(question) {
-  return (
-    question.explanation ??
-    question.detailedExplanation ??
-    question.aiExplanation ??
-    question.solution ??
-    question.analysis ??
-    null
-  )
-}
-
-function formatExplanationLabel(key) {
-  return key
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .replace(/[_-]+/g, ' ')
-    .trim()
-}
-
-function formatWhyOthersWrong(value) {
-  if (!value) {
-    return []
-  }
-
-  if (typeof value === 'string') {
-    return [{ label: '', value }]
-  }
-
-  if (typeof value === 'object' && !Array.isArray(value)) {
-    return ['A', 'B', 'C', 'D']
-      .filter((key) => value[key])
-      .map((key) => ({
-        label: key,
-        value: typeof value[key] === 'string' ? value[key] : String(value[key]),
-      }))
-  }
-
-  return [{ label: '', value: String(value) }]
-}
-
-function formatUnknownExplanationEntries(rawExplanation) {
-  return Object.entries(rawExplanation)
-    .filter(([, value]) => value !== null && value !== undefined && value !== '')
-    .map(([key, value]) => ({
-      title: formatExplanationLabel(key),
-      value:
-        typeof value === 'string'
-          ? value
-          : Array.isArray(value)
-            ? value.filter(Boolean).join('、')
-            : Object.entries(value)
-                .map(([nestedKey, nestedValue]) => `${nestedKey}：${nestedValue}`)
-                .join('\n'),
-    }))
-}
-
-function formatExplanation(question) {
-  const rawExplanation = getExplanationSource(question)
-
-  if (!rawExplanation) {
-    return { type: 'empty' }
-  }
-
-  if (typeof rawExplanation === 'string') {
-    return { type: 'text', content: rawExplanation }
-  }
-
-  if (typeof rawExplanation === 'object') {
-    const sections = []
-    const otherOptionRows = formatWhyOthersWrong(rawExplanation.whyOthersWrong)
-    const relatedTags = Array.isArray(rawExplanation.tags)
-      ? rawExplanation.tags.filter(Boolean).map(String)
-      : typeof rawExplanation.tags === 'string'
-        ? rawExplanation.tags.split(/[、,]/).map((item) => item.trim()).filter(Boolean)
-        : []
-
-    if (rawExplanation.coreConcept) {
-      sections.push({ title: '核心觀念', value: rawExplanation.coreConcept })
-    }
-
-    if (rawExplanation.whyCorrect) {
-      sections.push({ title: '為什麼正確', value: rawExplanation.whyCorrect })
-    }
-
-    if (otherOptionRows.length > 0) {
-      sections.push({ title: '其他選項解析', rows: otherOptionRows })
-    }
-
-    if (rawExplanation.memoryTip) {
-      sections.push({ title: '記憶提示', value: rawExplanation.memoryTip })
-    }
-
-    if (sections.length > 0 || relatedTags.length > 0) {
-      return {
-        type: 'structured',
-        sections,
-        tags: relatedTags,
-      }
-    }
-
-    return {
-      type: 'fallback',
-      sections: formatUnknownExplanationEntries(rawExplanation),
-    }
-  }
-
-  return { type: 'text', content: String(rawExplanation) }
-}
 
 function formatTags(question) {
   return extractQuestionTags(question)
@@ -209,9 +105,10 @@ function QuestionDetailPage() {
   }, [decodedQuestionId, questionId, reviewedQuestion, wrongBookItem])
 
   const question = resolvedQuestion
-  const userAnswer = question?.userAnswer || reviewedQuestion?.userAnswer || wrongBookItem?.userAnswer || ''
+  const fromUncertain=location.state?.from==='uncertain' || new URLSearchParams(location.search).get('from')==='uncertain'
+  const savedAttempt=getLatestSubmittedAnswer(decodedQuestionId,{flaggedOnly:fromUncertain})
+  const userAnswer = fromUncertain && savedAttempt ? savedAttempt.answer : question?.userAnswer || reviewedQuestion?.userAnswer || wrongBookItem?.userAnswer || savedAttempt?.answer || ''
   const questionKey = question ? getQuestionKey(question) : decodedQuestionId
-  const explanationContent = question ? formatExplanation(question) : { type: 'empty' }
   const tags = question ? formatTags(question) : []
   const isUsingCachedWrongItem = Boolean(question?._usedCachedWrongItem)
   const questionMetadataLabel = formatQuestionMetadata(
@@ -221,9 +118,16 @@ function QuestionDetailPage() {
       fallback: '歷屆來源：未標記',
     },
   )
+  const detailParams = new URLSearchParams(location.search)
   const returnTarget =
-    location.state?.from === 'wrong-review-result'
+    detailParams.get('from') === 'practice'
+      ? {to:selectionUrl(detailParams.get('selection') || ''),label:'返回選題條件'}
+      : location.state?.from === 'sources'
+      ? { to: '/sources', label: '返回來源查核' }
+      : location.state?.from === 'wrong-review-result'
       ? { to: `/wrong-review/${encodeURIComponent(location.state.subject)}/result`, label: '返回複習結果' }
+      : fromUncertain
+      ? {to:'/uncertain',label:'返回猶豫題'}
       : location.state?.from === 'bookmarks'
       ? { to: '/bookmarks', label: '返回收藏題' }
       : location.state?.from === 'results' || Boolean(subject)
@@ -324,7 +228,7 @@ function QuestionDetailPage() {
           )}
 
           {tags.length > 0 && (
-            <div className="mt-5 flex flex-wrap gap-2">
+            <div className="mt-5 flex flex-wrap gap-2"><p className="w-full text-sm text-slate-600">舊匯入標籤（未經專家核可）</p>
               {tags.map((tag) => (
                 <span
                   key={tag}
@@ -391,81 +295,18 @@ function QuestionDetailPage() {
             <p className="text-slate-700">
               正確答案：
               <span className="ml-2 inline-block align-top font-semibold text-slate-900">
-                {question.answer}.
+                {answerRuleLabel(question)}
               </span>
             </p>
             <QuestionRichText
-              text={getAcceptedAnswers(question.answer).map((key) => `${key}. ${question.options?.[key] || ''}`).join('\n')}
+              text={getAcceptedAnswers(getAnswerRule(question)).map((key) => `${key}. ${question.options?.[key] || ''}`).join('\n')}
               alt={`${question.id}-answer`}
               textClassName="whitespace-pre-line leading-relaxed text-slate-700"
               imageClassName="max-h-[20rem] w-full object-contain"
             />
           </div>
 
-          <div className="mt-6 rounded-2xl border border-slate-200 bg-white p-5">
-            <h2 className="text-lg font-bold text-slate-950">詳解</h2>
-            {explanationContent.type === 'empty' && (
-              <p className="mt-3 whitespace-pre-line leading-relaxed text-slate-700">此題目前尚無詳解</p>
-            )}
-
-            {explanationContent.type === 'text' && (
-              <QuestionRichText
-                text={explanationContent.content}
-                alt={`${question.id}-explanation`}
-                textClassName="mt-3 whitespace-pre-line leading-relaxed text-slate-700"
-                imageClassName="max-h-[20rem] w-full object-contain"
-              />
-            )}
-
-            {(explanationContent.type === 'structured' || explanationContent.type === 'fallback') && (
-              <div className="mt-4 space-y-5">
-                {explanationContent.sections.map((section) => (
-                  <div key={section.title} className="space-y-2">
-                    <h3 className="text-sm font-semibold text-slate-900">{section.title}</h3>
-                    {section.value && (
-                      <QuestionRichText
-                        text={section.value}
-                        alt={`${question.id}-explanation-${section.title}`}
-                        textClassName="whitespace-pre-line leading-relaxed text-slate-700"
-                        imageClassName="max-h-[20rem] w-full object-contain"
-                      />
-                    )}
-                    {section.rows && (
-                      <div className="space-y-2">
-                        {section.rows.map((row, index) => (
-                          <div key={`${section.title}-${row.label || index}`} className="rounded-xl bg-slate-50 px-4 py-3">
-                            {row.label && <p className="text-sm font-semibold text-slate-900">{row.label}：</p>}
-                            <QuestionRichText
-                              text={row.value}
-                              alt={`${question.id}-explanation-${section.title}-${row.label || index}`}
-                              textClassName="whitespace-pre-line leading-relaxed text-slate-700"
-                              imageClassName="max-h-[20rem] w-full object-contain"
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                ))}
-
-                {explanationContent.type === 'structured' && explanationContent.tags?.length > 0 && (
-                  <div className="space-y-2">
-                    <h3 className="text-sm font-semibold text-slate-900">相關標籤</h3>
-                    <div className="flex flex-wrap gap-2">
-                      {explanationContent.tags.map((tag) => (
-                        <span
-                          key={`explanation-tag-${tag}`}
-                          className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700"
-                        >
-                          {tag}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
+          <ExplanationSections question={question} />
         </section>
       </div>
     </main>

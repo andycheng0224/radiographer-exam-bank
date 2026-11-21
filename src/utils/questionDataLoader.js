@@ -1,3 +1,5 @@
+import { applyContentReview } from './contentReview.js'
+import supplements from '../data/verifiedSupplements.js'
 import { EXAM_SUBJECTS } from '../constants/subjects.js'
 import { getQuestionKey } from './storageUtils.js'
 import { normalizeQuestionKey, safeDecodeURIComponent } from './subjectUtils.js'
@@ -172,7 +174,8 @@ export async function loadQuestionFile(filePath) {
       fetchJson(filePath)
         .then((data) => {
           if (!Array.isArray(data) || data.some((question) => !question?.id || !question?.question || !question?.options || !question?.answer)) throw new Error('Invalid question file')
-          const normalizedData = data
+          const extra = supplements.filter(q => data.some(old => Number(old.year) === q.year && normalizeExamSubject(old.subject) === normalizeExamSubject(q.subject)) && !data.some(old => old.id === q.id))
+          const normalizedData = [...data, ...extra].map(applyContentReview)
           memoryCache.fileMap.set(filePath, normalizedData)
           return normalizedData
         })
@@ -194,7 +197,7 @@ export async function loadQuestionsBySubjectAndYearRange(subject, startYear, end
   const fileEntries = questionIndex.filter((entry) => {
     const entryYear = Number(entry.year)
     return (
-      normalizeExamSubject(entry.subject) === normalizedSubject &&
+      (!subject || subject === '全部科目' || normalizeExamSubject(entry.subject) === normalizedSubject) &&
       (!Number.isFinite(safeStartYear) || entryYear >= safeStartYear) &&
       (!Number.isFinite(safeEndYear) || entryYear <= safeEndYear)
     )

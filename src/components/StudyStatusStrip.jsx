@@ -21,8 +21,8 @@ function StudyStatusStrip({ compact = false }) {
             </p>
             <p className="mt-1 text-sm leading-6 text-slate-700">
               {status.isExamDateExpired
-                ? '請重新設定考試日期，首頁才會顯示正確倒數與今日任務。'
-                : '設定考試日期與每日目標後，首頁會顯示倒數、今日進度與複習建議。'}
+                ? '請重新設定考試日期，以更新倒數。'
+                : '設定後可在學習紀錄查看倒數與每日進度；學習建議需主動開啟。'}
             </p>
           </div>
           <Button as={Link} to="/settings" variant="secondary" className="shrink-0">

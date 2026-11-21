@@ -1,3 +1,5 @@
+import { commitQuizSubmission } from '../utils/submissionService'
+import { withProgressLock } from '../utils/progressLock'
 import useConfirmation from '../components/useConfirmation'
 import useDialog from '../utils/useDialog'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -7,22 +9,22 @@ import Button from '../components/Button'
 import Navbar from '../components/Navbar'
 import QuestionCard from '../components/QuestionCard'
 import SeoMeta from '../components/SeoMeta'
-import { calculateExamResult } from '../utils/quizUtils'
-import { getQuestionKey, updateTodayStats, appendTodayWrongQuestions, writeUserScopedStorageValue } from '../utils/storageUtils'
-import { recordGrowthFromExamSubmission } from '../utils/growthUtils'
-import { clearQuizDraft, readQuizDraft, saveQuizDraft } from '../utils/quizSessionUtils'
+import { getQuestionKey } from '../utils/storageUtils'
+import { newSessionId, restoreAnswers, readQuizDraft, saveQuizDraft } from '../utils/quizSessionUtils'
 import { getWrongQuestionDetail } from '../utils/subjectUtils'
 import { loadQuestionsByKeys } from '../utils/questionDataLoader'
-import { getWrongItemsBySubject, pickWrongReviewItems, applyWrongReviewResults } from '../utils/wrongReviewUtils'
+import { getWrongItemsBySubject, pickWrongReviewItems } from '../utils/wrongReviewUtils'
 
 function WrongReviewQuizPage() {
   const [confirm, confirmationDialog] = useConfirmation()
   const navigate = useNavigate()
   const { subject: subjectParam } = useParams()
   const subject = subjectParam || ''
+  const [sessionId,setSessionId] = useState('')
   const [reviewQuestions, setReviewQuestions] = useState([])
   const [isLoading, setIsLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
+  const [submitError,setSubmitError] = useState('')
   const [currentIndex, setCurrentIndex] = useState(0)
   const [answerMap, setAnswerMap] = useState({})
   const [isNavigatorOpen, setIsNavigatorOpen] = useState(false)
@@ -32,7 +34,7 @@ function WrongReviewQuizPage() {
   const currentQuestion = reviewQuestions[currentIndex]
   const currentQuestionKey = currentQuestion ? getQuestionKey(currentQuestion) : ''
   const selectedAnswer = currentQuestionKey ? answerMap[currentQuestionKey] || '' : ''
-  const answeredCount = Object.keys(answerMap).length
+  const answeredCount = reviewQuestions.filter(q => Boolean(answerMap[getQuestionKey(q)])).length
 
   useEffect(() => {
     let isCancelled = false
@@ -58,8 +60,9 @@ function WrongReviewQuizPage() {
 
         if (!isCancelled) {
           setReviewQuestions(mergedQuestions)
+          setSessionId(draftItems.length && draft.sessionId ? draft.sessionId : newSessionId())
           setCurrentIndex(draftItems.length ? Math.max(0, Math.min(mergedQuestions.length - 1, Number(draft.currentIndex) || 0)) : 0)
-          setAnswerMap(draftItems.length ? Object.fromEntries(Object.entries(draft.answers).filter(([key, answer]) => wrongKeys.includes(key) && ['A','B','C','D'].includes(answer))) : {})
+          setAnswerMap(draftItems.length ? restoreAnswers(draft,mergedQuestions) : {})
           submittedRef.current = false
         }
       } catch {
@@ -82,8 +85,8 @@ function WrongReviewQuizPage() {
   }, [subject, retryCount])
 
   useEffect(() => {
-    if (!isLoading && reviewQuestions.length && !submittedRef.current) saveQuizDraft('review', { subject, questionKeys: reviewQuestions.map(getQuestionKey), answers: answerMap, currentIndex })
-  }, [subject, reviewQuestions, answerMap, currentIndex, isLoading])
+    if (!isLoading && reviewQuestions.length && !submittedRef.current) withProgressLock(() => saveQuizDraft('review', { subject, sessionId, questionKeys: reviewQuestions.map(getQuestionKey), answers: answerMap, currentIndex })).catch(error=>setSubmitError(error.message))
+  }, [subject, reviewQuestions, answerMap, currentIndex, isLoading, sessionId])
 
   const handleSelectAnswer = (answer) => {
     if (!currentQuestion) {
@@ -124,19 +127,14 @@ function WrongReviewQuizPage() {
       return
     }
 
+    if (submittedRef.current) return
     submittedRef.current = true
-    const calculatedResult = calculateExamResult(reviewQuestions, answerMap)
-    const wrongReviewUpdate = applyWrongReviewResults(calculatedResult.perQuestionResults)
-    const payload = { subject, submittedAt: Date.now(), questionsSnapshot: reviewQuestions,
-      userAnswersSnapshot: answerMap, calculatedResult, wrongReviewUpdate }
-    updateTodayStats({ answeredCountDelta: calculatedResult.correctCount + calculatedResult.wrongCount,
-      correctCountDelta: calculatedResult.correctCount, wrongCountDelta: calculatedResult.wrongCount })
-    appendTodayWrongQuestions(calculatedResult.perQuestionResults.filter((item) => item.status === 'wrong'))
-    recordGrowthFromExamSubmission({ ...payload, mode: 'review', perQuestionResults: calculatedResult.perQuestionResults })
-    const { calculatedResult: ignored, ...storedPayload } = payload
-    writeUserScopedStorageValue('radiographer_exam_bank_wrong_review_result', storedPayload)
-    clearQuizDraft('review', subject)
-    navigate(`/wrong-review/${encodeURIComponent(subject)}/result`, { replace: true, state: payload })
+    setSubmitError('')
+    try {
+      const payload=await commitQuizSubmission({subject,sessionId,mode:'review',submittedAt:Date.now(),questionsSnapshot:reviewQuestions,userAnswersSnapshot:answerMap})
+      navigate(`/wrong-review/${encodeURIComponent(subject)}/result`,{replace:true,state:payload})
+    } catch(error) {submittedRef.current=false;setSubmitError(error.message)}
+
   }
 
   const questionButtons = useMemo(
@@ -174,6 +172,7 @@ function WrongReviewQuizPage() {
           </section>
         ) : null}
 
+        {submitError && <p role="alert">{submitError}</p>}
         {!isLoading && loadError ? (
           <section className="rounded-[1.75rem] border border-rose-200 bg-white p-6 shadow-sm">
             <p className="font-bold text-rose-700">{loadError}</p>

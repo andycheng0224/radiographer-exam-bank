@@ -260,7 +260,7 @@ function WrongBookPage() {
           <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-4">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">錯題總數</p>
-              <p className="mt-2 text-2xl font-black text-slate-950">{wrongQuestions.length}</p>
+              <p className="mt-2 text-2xl font-black text-slate-950">{wrongQuestionIds.length}</p>
             </div>
             <div className="rounded-[1.25rem] border border-slate-200 bg-slate-50 px-4 py-4">
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">依科目分布</p>
@@ -438,7 +438,7 @@ function WrongBookPage() {
 
                     {tags.length > 0 && (
                       <div className="flex flex-wrap gap-2">
-                        {tags.map((tag) => (
+                        {/* Legacy tags are display hints only. */}{tags.length > 0 && <span className="text-xs text-amber-800">舊匯入標籤（未驗證）</span>}{tags.map((tag) => (
                           <span
                             key={tag}
                             className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-700"
@@ -451,7 +451,7 @@ function WrongBookPage() {
 
                     {explanation && (
                       <div className="rounded-[1.25rem] border border-slate-200 bg-slate-50 p-4">
-                        <p className="text-sm font-semibold text-slate-900">詳解</p>
+                        <p className="text-sm font-semibold text-slate-900">詳解摘要</p><p className="text-sm text-amber-800">{question.contentReview?.status==='source-checked' ? '有限來源查核，尚未經專家審核；範圍見完整題目。' : '既有 AI／匯入詳解尚未核實，請至完整題目查看來源狀態。'}</p>
                         <QuestionRichText text={explanation} alt="詳解附圖" textClassName="mt-2 whitespace-pre-line text-sm leading-relaxed text-slate-600" />
                       </div>
                     )}

@@ -1,8 +1,12 @@
+import { commitQuizSubmission } from '../utils/submissionService'
+import { withProgressLock } from '../utils/progressLock'
 import useConfirmation from '../components/useConfirmation'
 import useDialog from '../utils/useDialog'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import BackLink from '../components/BackLink'
+import { selectPracticeQuestions, practiceScope } from '../utils/practiceSelection'
+import { normalizeSelection } from '../utils/answerRules'
+import { selectTaskQuestions } from '../utils/studyAgentAdapter'
 import Button from '../components/Button'
 import Navbar from '../components/Navbar'
 import QuestionCard from '../components/QuestionCard'
@@ -10,28 +14,21 @@ import SeoMeta from '../components/SeoMeta'
 import { EXAM_DURATION_SECONDS } from '../constants/subjects'
 import {
   QUIZ_LENGTH,
-  calculateExamResult,
   formatTime,
   generateRandomExamQuestions,
 } from '../utils/quizUtils'
 import {
-  appendTodayWrongQuestions,
   getBookmarkIds,
   getQuestionKey,
   getPracticeYearRange,
-  saveExamResult,
-  saveSingleSubjectExamResult,
-  saveWrongQuestionIds,
   toggleBookmark,
-  updateTodayStats,
 } from '../utils/storageUtils'
-import { recordGrowthFromExamSubmission } from '../utils/growthUtils'
 import {
   getAvailableYearsFromIndex,
 } from '../utils/subjectUtils'
 import { getQuestionIndex, loadQuestionsBySubjectAndYearRange } from '../utils/questionDataLoader'
 
-import { clearQuizDraft, getRemainingSeconds, readQuizDraft, restoreDraftQuestions, saveQuizDraft } from '../utils/quizSessionUtils'
+import { clearQuizDraft, getRemainingSeconds, newSessionId, restoreAnswers, readQuizDraft, getDraftRestorePlan, saveQuizDraft } from '../utils/quizSessionUtils'
 
 function QuizPage() {
   const [confirm, confirmationDialog] = useConfirmation()
@@ -39,10 +36,23 @@ function QuizPage() {
   const { subject: subjectParam } = useParams()
   const [searchParams] = useSearchParams()
   const subject = subjectParam || ''
+  const mode = searchParams.get('mode') === 'paper' ? 'paper' : searchParams.get('mode') === 'practice' ? 'practice' : searchParams.get('mode') === 'task' ? 'task' : 'random'
+  const paper = searchParams.get('paper') || ''
+  const keyword = searchParams.get('keyword') || ''
+  const tag = searchParams.get('tag') || ''
+  const taskId = searchParams.get('taskId') || ''
+  const scope = practiceScope({ mode, paper, keyword, tag, taskId })
+  const timed = mode === 'paper' || mode === 'random'
+  const modeLabel = mode === 'paper' ? '整份試卷' : mode === 'random' ? '跨梯次混合抽題' : mode === 'task' ? 'OnTrack 指定練習' : '單元練習'
+  const [sessionId, setSessionId] = useState('')
+  const [startedAt, setStartedAt] = useState(0)
+  const [isReady, setIsReady] = useState(false)
   const [questionIndex, setQuestionIndex] = useState([])
   const [subjectQuestions, setSubjectQuestions] = useState([])
   const [isLoadingQuestions, setIsLoadingQuestions] = useState(true)
   const [loadError, setLoadError] = useState('')
+  const [submitError, setSubmitError] = useState('')
+  const [draftNotice,setDraftNotice] = useState('')
   const availableYears = useMemo(() => getAvailableYearsFromIndex(questionIndex), [questionIndex])
   const savedRange = useMemo(() => getPracticeYearRange(), [])
   const defaultStartYear = availableYears.includes(savedRange.startYear) ? savedRange.startYear : availableYears[0] ?? 100
@@ -52,7 +62,7 @@ function QuizPage() {
   const startYear = availableYears.includes(requestedStartYear) ? requestedStartYear : defaultStartYear
   const endYearCandidate = availableYears.includes(requestedEndYear) ? requestedEndYear : defaultEndYear
   const endYear = Math.max(startYear, endYearCandidate)
-  const hasEnoughQuestions = subjectQuestions.length >= QUIZ_LENGTH
+  const hasEnoughQuestions = mode === 'random' ? subjectQuestions.length >= QUIZ_LENGTH : subjectQuestions.length > 0
   const [examQuestions, setExamQuestions] = useState(() =>
     generateRandomExamQuestions(subjectQuestions, QUIZ_LENGTH),
   )
@@ -85,7 +95,8 @@ function QuizPage() {
   const currentQuestionKey = currentQuestion ? getQuestionStateKey(currentQuestion) : ''
   const selectedAnswer = currentQuestion ? getStoredAnswer(currentQuestion) : ''
   const isCurrentQuestionFlagged = currentQuestionKey ? flaggedQuestionKeys.includes(currentQuestionKey) : false
-  const answeredCount = Object.keys(answerMap).length
+  const answeredCount = examQuestions.filter((q) => Boolean(answerMap[getQuestionStateKey(q)])).length
+  const questionCount = examQuestions.length
   const timerTextColorClassName = secondsLeft <= 599 ? 'text-rose-600' : 'text-slate-950'
 
   useEffect(() => {
@@ -123,11 +134,12 @@ function QuizPage() {
     async function loadQuestions() {
       try {
         setIsLoadingQuestions(true)
+        setIsReady(false)
         setLoadError('')
         const nextQuestions = await loadQuestionsBySubjectAndYearRange(subject, startYear, endYear)
 
         if (!isCancelled) {
-          setSubjectQuestions(nextQuestions)
+          setSubjectQuestions(mode === 'random' ? nextQuestions : mode === 'task' ? selectTaskQuestions(nextQuestions, taskId) : selectPracticeQuestions(nextQuestions, { mode, paper, keyword, tag, subject, startYear, endYear }))
         }
       } catch {
         if (!isCancelled) {
@@ -146,18 +158,22 @@ function QuizPage() {
     return () => {
       isCancelled = true
     }
-  }, [questionIndex, subject, startYear, endYear, retryCount])
+  }, [questionIndex, subject, startYear, endYear, mode, paper, keyword, tag, taskId, retryCount])
 
   useEffect(() => {
     if (isLoadingQuestions) return
     if (!hasEnoughQuestions || loadError) { setExamQuestions([]); setDeadline(null); return }
-    const draft = readQuizDraft('exam', subject, startYear, endYear)
-    const restored = restoreDraftQuestions(draft, subjectQuestions)
-    const canRestore = restored.length === QUIZ_LENGTH
+    const draft = readQuizDraft('exam', subject, startYear, endYear, scope)
+    const plan=getDraftRestorePlan(draft,subjectQuestions,mode==='random'?QUIZ_LENGTH:undefined)
+    if(plan.status==='unavailable'){setIsReady(false);setLoadError('未交卷進度有題目暫時無法載入，原進度保留，未重新抽題。請重試載入或先匯出進度備份。');return}
+    const restored=plan.questions,canRestore=plan.status==='resume'
+    setDraftNotice(canRestore&&plan.catalogChanged ? `題庫收錄已更新；本次保留原進度的 ${restored.length} 題與倒數。若要納入新增題目，請選擇重新開始。` : '')
     const nextDeadline = canRestore ? draft.deadline : Date.now() + EXAM_DURATION_SECONDS * 1000
-    setExamQuestions(canRestore ? restored : generateRandomExamQuestions(subjectQuestions, QUIZ_LENGTH))
-    setCurrentIndex(canRestore ? Math.max(0, Math.min(QUIZ_LENGTH - 1, Number(draft.currentIndex) || 0)) : 0)
-    setAnswerMap(canRestore ? Object.fromEntries(Object.entries(draft.answers).filter(([key, answer]) => draft.questionKeys.includes(key) && ['A','B','C','D'].includes(answer))) : {})
+    setExamQuestions(canRestore ? restored : mode === 'random' ? generateRandomExamQuestions(subjectQuestions, QUIZ_LENGTH) : subjectQuestions)
+    setSessionId(canRestore && draft.sessionId ? draft.sessionId : newSessionId())
+    setStartedAt(canRestore && draft.startedAt ? draft.startedAt : Date.now())
+    setCurrentIndex(canRestore ? Math.max(0, Math.min(restored.length - 1, Number(draft.currentIndex) || 0)) : 0)
+    setAnswerMap(canRestore ? restoreAnswers(draft, restored) : {})
     setFlaggedQuestionKeys(canRestore && Array.isArray(draft.flaggedKeys) ? draft.flaggedKeys.filter((key) => draft.questionKeys.includes(key)) : [])
     setDeadline(nextDeadline)
     setSecondsLeft(getRemainingSeconds(nextDeadline))
@@ -166,25 +182,26 @@ function QuizPage() {
     setIsSubmitted(false)
     submittedRef.current = false
     setIsNavigatorOpen(false)
-  }, [subject, startYear, endYear, hasEnoughQuestions, isLoadingQuestions, subjectQuestions, loadError])
+    setIsReady(true)
+  }, [subject, startYear, endYear, hasEnoughQuestions, isLoadingQuestions, subjectQuestions, loadError, scope, mode])
 
   useEffect(() => {
-    if (!deadline || isSubmitted || isLoadingQuestions || !examQuestions.length) return
-    saveQuizDraft('exam', { subject, startYear, endYear, deadline,
-      questionKeys: examQuestions.map(getQuestionKey), answers: answerMap, currentIndex, flaggedKeys: flaggedQuestionKeys })
-  }, [subject, startYear, endYear, deadline, examQuestions, answerMap, currentIndex, flaggedQuestionKeys, isSubmitted, isLoadingQuestions])
+    if (!isReady || !sessionId || !deadline || isSubmitted || isLoadingQuestions || !examQuestions.length) return
+    withProgressLock(() => saveQuizDraft('exam', { subject, startYear, endYear, scope, sessionId, startedAt, deadline,
+      questionKeys: examQuestions.map(getQuestionKey), answers: answerMap, currentIndex, flaggedKeys: flaggedQuestionKeys })).catch(error => setSubmitError(error.message))
+  }, [subject, startYear, endYear, deadline, examQuestions, answerMap, currentIndex, flaggedQuestionKeys, isSubmitted, isLoadingQuestions, isReady, sessionId, startedAt, scope])
 
   useEffect(() => {
-    if (!deadline || isSubmitted || isLoadingQuestions) return
+    if (!timed || !isReady || !deadline || isSubmitted || isLoadingQuestions) return
     const tick = () => setSecondsLeft(getRemainingSeconds(deadline))
     const timer = window.setInterval(tick, 1000)
     window.addEventListener('focus', tick)
     document.addEventListener('visibilitychange', tick)
     return () => { clearInterval(timer); window.removeEventListener('focus', tick); document.removeEventListener('visibilitychange', tick) }
-  }, [deadline, isSubmitted, isLoadingQuestions])
+  }, [deadline, isSubmitted, isLoadingQuestions, timed, isReady])
 
   useEffect(() => {
-    if (secondsLeft > 300 || secondsLeft === 0 || hasShownFiveMinuteWarning || isSubmitted || !deadline) {
+    if (!timed || !isReady || secondsLeft > 300 || secondsLeft === 0 || hasShownFiveMinuteWarning || isSubmitted || !deadline) {
       return undefined
     }
 
@@ -195,65 +212,26 @@ function QuizPage() {
   }, [secondsLeft, hasShownFiveMinuteWarning, isSubmitted])
 
   useEffect(() => {
-    if (secondsLeft !== 0 || isSubmitted || !hasEnoughQuestions) {
+    if (!timed || !isReady || secondsLeft !== 0 || isSubmitted || submitError || !hasEnoughQuestions) {
       return
     }
 
     autoSubmitExam()
-  }, [secondsLeft, isSubmitted, hasEnoughQuestions])
+  }, [secondsLeft, isSubmitted, hasEnoughQuestions, timed, isReady])
 
-  const submitExam = (submissionType) => {
-    if (submittedRef.current || isLoadingQuestions || !examQuestions.length) return
+  const submitExam = async (submissionType) => {
+    if (submittedRef.current || !isReady || isLoadingQuestions || !examQuestions.length) return
     submittedRef.current = true
-
-    const calculatedResult = calculateExamResult(examQuestions, answerMap)
-    const summary = calculatedResult
-    const perQuestionResults = calculatedResult.perQuestionResults
-    const wrongQuestions = perQuestionResults.filter((question) => question.status === 'wrong')
-    const elapsedSeconds = EXAM_DURATION_SECONDS - Math.min(EXAM_DURATION_SECONDS, getRemainingSeconds(deadline))
-    const submittedAt = Date.now()
-    const resultPayload = {
-      examId: `${subject}-${submittedAt}`,
-      subject,
-      startYear,
-      endYear,
-      yearRange: `${startYear}–${endYear} 年`,
-      questionsSnapshot: examQuestions,
-      userAnswersSnapshot: answerMap,
-      elapsedSeconds,
-      submissionType,
-      submittedAt,
+    setIsSubmitted(true); setSubmitError('')
+    try {
+      const resultPayload = await commitQuizSubmission({examId:sessionId,sessionId,mode,scope,taskId,
+        selectionSearch:searchParams.toString(),subject,startYear,endYear,yearRange:`${startYear}–${endYear} 年`,
+        questionsSnapshot:examQuestions,userAnswersSnapshot:answerMap,flaggedKeys:flaggedQuestionKeys,
+        elapsedSeconds:Math.max(0,Math.floor((Date.now()-startedAt)/1000)),submissionType,submittedAt:Date.now()})
+      navigate(`/results/${encodeURIComponent(subject)}?startYear=${startYear}&endYear=${endYear}`,{state:resultPayload,replace:true})
+    } catch (error) {
+      submittedRef.current=false;setIsSubmitted(false);setSubmitError(error.message)
     }
-
-    setIsSubmitted(true)
-    updateTodayStats({
-      answeredCountDelta: summary.correctCount + summary.wrongCount,
-      correctCountDelta: summary.correctCount,
-      wrongCountDelta: summary.wrongCount,
-    })
-    saveSingleSubjectExamResult({
-      type: 'single_subject',
-      subject,
-      totalQuestions: summary.totalCount,
-      correctCount: summary.correctCount,
-      wrongCount: summary.wrongCount,
-      unansweredCount: summary.unansweredCount,
-      score: summary.score,
-      elapsedTime: elapsedSeconds,
-      yearRange: `${startYear}–${endYear} 年`,
-      wrongQuestions,
-      submittedAt,
-    })
-    appendTodayWrongQuestions(wrongQuestions)
-    saveWrongQuestionIds(wrongQuestions)
-    saveExamResult(subject, resultPayload)
-    recordGrowthFromExamSubmission({ ...resultPayload, perQuestionResults })
-    clearQuizDraft('exam', subject, startYear, endYear)
-
-    navigate(`/results/${encodeURIComponent(subject)}?startYear=${startYear}&endYear=${endYear}`, {
-      state: resultPayload,
-      replace: true,
-    })
   }
 
   const autoSubmitExam = () => {
@@ -273,7 +251,7 @@ function QuizPage() {
 
     setAnswerMap((prev) => ({
       ...prev,
-      [questionKey]: answer,
+      [questionKey]: normalizeSelection(answer),
     }))
   }
 
@@ -288,21 +266,24 @@ function QuizPage() {
   }
 
   const handleRestart = async () => {
-    if (!hasEnoughQuestions) {
+    if (!hasEnoughQuestions || submittedRef.current) {
       return
     }
 
-    const shouldRestart = await confirm('重新抽題會清除目前作答進度、答案與剩餘時間，確定要重新抽題嗎？')
+    const shouldRestart = await confirm('重新開始會捨棄本次未交卷答案並重設時間，不計入統計。確定重新開始嗎？')
 
     if (!shouldRestart) {
       return
     }
 
-    setExamQuestions(generateRandomExamQuestions(subjectQuestions, QUIZ_LENGTH))
+    try { await withProgressLock(() => clearQuizDraft('exam', subject, startYear, endYear, scope, sessionId)) } catch(error) {setSubmitError(error.message);return}
+    setExamQuestions(mode === 'random' ? generateRandomExamQuestions(subjectQuestions, QUIZ_LENGTH) : subjectQuestions)
+    setSessionId(newSessionId())
+    setDraftNotice('')
+    setStartedAt(Date.now())
     setCurrentIndex(0)
     setAnswerMap({})
     setFlaggedQuestionKeys([])
-    clearQuizDraft('exam', subject, startYear, endYear)
     submittedRef.current = false
     setDeadline(Date.now() + EXAM_DURATION_SECONDS * 1000)
     setSecondsLeft(EXAM_DURATION_SECONDS)
@@ -348,23 +329,25 @@ function QuizPage() {
         robots="noindex,nofollow"
       />
       <div className="mx-auto flex max-w-7xl flex-col gap-6">
-        <BackLink label="返回放射師國考" fallbackTo="/radiographer" />
+        <div className="flex flex-wrap gap-3"><Button disabled={isSubmitted} variant="ghost" onClick={() => navigate(mode === 'task' ? '/study' : `/practice?${searchParams.toString()}&subject=${encodeURIComponent(subject)}`)}>返回選題（保留進度）</Button><Button disabled={isSubmitted} variant="ghost" onClick={async () => { if (submittedRef.current) return; if (await confirm('中止會捨棄這份尚未交卷的作答，不計入統計。', '中止練習', '中止')) { submittedRef.current = true; setIsSubmitted(true); try { await withProgressLock(() => clearQuizDraft('exam', subject, startYear, endYear, scope, sessionId)); navigate('/'); } catch(error) {submittedRef.current=false;setIsSubmitted(false);setSubmitError(error.message)} } }}>中止練習</Button></div>
         <Navbar
           subtitle="Timed Subject Exam"
           title={subject}
           actions={
             <>
               <div className="rounded-xl border border-slate-300 bg-slate-50 px-5 py-3 text-sm font-bold text-slate-700">
-                剩餘時間
-                <span className={`ml-3 text-lg ${timerTextColorClassName}`}>{formatTime(secondsLeft)}</span>
+                {timed ? '剩餘時間' : '不限時練習'}
+                {timed && <span className={`ml-3 text-lg ${timerTextColorClassName}`}>{formatTime(secondsLeft)}</span>}
               </div>
-              <Button type="button" onClick={handleRestart} variant="ghost">
-                重新抽題
+              <Button type="button" onClick={handleRestart} disabled={isSubmitted} variant="ghost">
+                重新開始
               </Button>
             </>
           }
         />
 
+        {draftNotice && <p role="status" className="rounded-xl bg-blue-50 p-4 text-blue-900">{draftNotice}</p>}
+        {submitError && <p role="alert" className="rounded-xl bg-amber-50 p-4 text-amber-900">{submitError}</p>}
         {loadError && (
           <section className="rounded-[1.75rem] border border-rose-200 bg-white p-6 shadow-[0_20px_50px_rgba(15,23,42,0.06)]">
             <p className="text-lg font-bold text-rose-700">{loadError}</p>
@@ -384,7 +367,7 @@ function QuizPage() {
         {!isLoadingQuestions && !loadError && !hasEnoughQuestions && (
           <section className="rounded-[1.75rem] border border-rose-200 bg-white p-6 shadow-[0_20px_50px_rgba(15,23,42,0.06)]">
             <p className="text-lg font-bold text-rose-700">
-              此科目題庫不足 80 題，無法開始單科限時測驗
+              {mode === 'random' ? '混合抽題至少需要 80 題' : '沒有符合條件的題目，無法開始練習'}
             </p>
             <p className="mt-2 text-slate-600">
               目前年份範圍：民國 {startYear} 年至 {endYear} 年
@@ -410,10 +393,11 @@ function QuizPage() {
                       測驗資訊
                     </p>
                     <h2 className="mt-2 text-lg font-bold text-slate-950">
-                      醫事放射師單科限時測驗
+                      {modeLabel}
                     </h2>
                     <p className="mt-2 text-sm text-slate-600">
-                      科目：{subject}｜題數：{QUIZ_LENGTH} 題｜年份：民國 {startYear} 年至 {endYear} 年
+                      科目：{subject}｜題數：{questionCount} 題｜年份：民國 {startYear} 年至 {endYear} 年{mode === 'paper' && `｜${currentQuestion.exam_round}`}
+                      {mode === 'paper' && '（依現有收錄；尚未逐卷核對官方完整性）'}
                     </p>
                   </div>
                   <div className="grid grid-cols-3 gap-3 text-center">
@@ -427,7 +411,7 @@ function QuizPage() {
                     </div>
                     <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                       <p className="text-xs text-slate-500">未作答</p>
-                      <p className="mt-1 text-xl font-black text-slate-950">{QUIZ_LENGTH - answeredCount}</p>
+                      <p className="mt-1 text-xl font-black text-slate-950">{questionCount - answeredCount}</p>
                     </div>
                   </div>
                 </div>
@@ -440,8 +424,9 @@ function QuizPage() {
 
               <QuestionCard
                 key={currentQuestionKey}
-                questionNumber={currentIndex + 1}
-                totalQuestions={QUIZ_LENGTH}
+                questionNumber={mode === 'paper' ? currentQuestion.question_number : currentIndex + 1}
+                totalQuestions={questionCount}
+                modeLabel={modeLabel}
                 question={currentQuestion}
                 selectedAnswer={selectedAnswer}
                 isBookmarked={bookmarkIds.includes(currentQuestionKey)}
@@ -466,8 +451,8 @@ function QuizPage() {
                     type="button"
                     variant="secondary"
                     onClick={() => handleMoveQuestion(currentIndex + 1)}
-                    disabled={currentIndex === QUIZ_LENGTH - 1}
-                    className={currentIndex === QUIZ_LENGTH - 1 ? 'pointer-events-none opacity-50' : ''}
+                    disabled={currentIndex === questionCount - 1}
+                    className={currentIndex === questionCount - 1 ? 'pointer-events-none opacity-50' : ''}
                   >
                     下一題
                   </Button>
@@ -482,7 +467,7 @@ function QuizPage() {
               <div className="border-b border-slate-200 pb-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">作答導覽</p>
                 <p className="mt-2 text-sm font-semibold text-slate-800">
-                  已作答 {answeredCount} / {QUIZ_LENGTH}
+                  已作答 {answeredCount} / {questionCount}
                 </p>
                 <p className="mt-1 text-sm text-slate-500">作答進度自動儲存，可離開後繼續；每日統計於交卷後更新。</p>
               </div>
@@ -507,7 +492,7 @@ function QuizPage() {
                       onClick={() => handleMoveQuestion(index)}
                       className={`rounded-xl border px-3 py-3 text-sm font-semibold transition ${className}`}
                     >
-                      {index + 1}
+                      {mode === 'paper' ? question.question_number : index + 1}
                     </button>
                   )
                 })}
@@ -544,8 +529,8 @@ function QuizPage() {
                 type="button"
                 variant="secondary"
                 onClick={() => handleMoveQuestion(currentIndex + 1)}
-                disabled={currentIndex === QUIZ_LENGTH - 1}
-                className={currentIndex === QUIZ_LENGTH - 1 ? 'pointer-events-none opacity-50' : ''}
+                disabled={currentIndex === questionCount - 1}
+                className={currentIndex === questionCount - 1 ? 'pointer-events-none opacity-50' : ''}
               >
                 下一題
               </Button>
@@ -566,7 +551,7 @@ function QuizPage() {
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-[0.24em] text-slate-500">作答導覽</p>
                     <p className="mt-2 text-sm font-semibold text-slate-800">
-                      已作答 {answeredCount} / {QUIZ_LENGTH}
+                      已作答 {answeredCount} / {questionCount}
                     </p>
                   </div>
                   <Button type="button" variant="ghost" className="px-4 py-2" onClick={() => setIsNavigatorOpen(false)}>
@@ -594,7 +579,7 @@ function QuizPage() {
                         onClick={() => handleMoveQuestion(index)}
                         className={`rounded-xl border px-3 py-3 text-sm font-semibold transition ${className}`}
                       >
-                        {index + 1}
+                        {mode === 'paper' ? question.question_number : index + 1}
                       </button>
                     )
                   })}

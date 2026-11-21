@@ -1,4 +1,6 @@
-import { useMemo } from 'react'
+import { withProgressLock } from '../utils/progressLock'
+import { reconcileGrading, reconciliationMessage } from '../utils/reconcileGrading'
+import { useMemo, useEffect, useState } from 'react'
 import { readUserScopedStorageValue } from '../utils/storageUtils'
 import { calculateExamResult } from '../utils/quizUtils'
 import { QuestionRichText } from '../components/QuestionContent'
@@ -16,8 +18,11 @@ function WrongReviewResultPage() {
   const payload = useMemo(() => {
     const saved = location.state || readUserScopedStorageValue('radiographer_exam_bank_wrong_review_result', null)
     if (!saved || saved.subject !== subject) return null
-    return { ...saved, calculatedResult: saved.calculatedResult || calculateExamResult(saved.questionsSnapshot, saved.userAnswersSnapshot) }
+    return { ...saved, calculatedResult: saved.questionsSnapshot ? calculateExamResult(saved.questionsSnapshot, saved.userAnswersSnapshot) : saved.calculatedResult }
   }, [location.state, subject])
+
+  const [reconciliation,setReconciliation] = useState(null)
+  useEffect(()=>{let active=true;withProgressLock(()=>reconcileGrading(payload)).then(report=>{if(active)setReconciliation(report)}).catch(()=>{if(active)setReconciliation({status:'storage-unavailable'})});return()=>{active=false}},[payload])
 
   if (!payload?.calculatedResult) {
     return <Navigate to="/wrong-review" replace />
@@ -39,7 +44,7 @@ function WrongReviewResultPage() {
         <BackLink label="返回錯題複習" fallbackTo="/wrong-review" />
         <Navbar subtitle="Wrong Review Result" title={`${subject} 錯題複習結果`} />
 
-        <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+        {payload.studyAgentWarning && <p role="status">{payload.studyAgentWarning}</p>}{payload.duplicateSubmission && <p role="status">此份作答已交卷；本次沒有重複計入統計。</p>}<p>{reconciliationMessage(reconciliation)}</p><section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {[
             ['總題數', `${result.totalCount} 題`, 'slate'],
             ['答對題數', `${result.correctCount} 題`, 'emerald'],

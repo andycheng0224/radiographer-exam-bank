@@ -1,11 +1,14 @@
-import { useState } from 'react'
+import { officialQuestionLink } from '../utils/officialSources'
+import QuestionFigureViewer from './QuestionFigureViewer'
+import { useEffect, useState } from 'react'
 const IMAGE_PLACEHOLDER_PATTERN = /\{\{image:([^}]+)\}\}/g
 
 function QuestionImage({ src, alt, className, allowRetry = true }) {
   const [failed, setFailed] = useState(false)
   const [attempt, setAttempt] = useState(0)
+  useEffect(()=>{setFailed(false);setAttempt(0)},[src])
   if (failed) return <div role="status" className="p-4 text-sm text-slate-700">
-    附圖載入失敗，請確認網路後重試。
+    附圖未能載入，可能是檔案缺漏或連線問題。可重試或查看本卷官方原題，勿依缺圖判斷答案。
     {allowRetry && <button type="button" className="ml-2 font-bold underline" onClick={(event) => { event.stopPropagation(); setFailed(false); setAttempt((value) => value + 1) }}>重試圖片</button>}
   </div>
   return <img key={`${src}-${attempt}`} src={src} alt={alt || '題目附圖'} loading="lazy" decoding="async" onError={() => setFailed(true)} className={`question-image ${className}`} />
@@ -116,8 +119,11 @@ export function QuestionRichText({
 }
 
 function QuestionContent({ question }) {
+  const official = officialQuestionLink(question)
   return (
     <div className="space-y-5">
+      <QuestionFigureViewer question={question} />
+      <a href={official.url} target="_blank" rel="noreferrer" className="inline-block text-base font-semibold text-blue-700 underline">{official.direct ? '查看本卷官方原題 PDF（含完整附圖）' : '前往考選部查詢原題（本題尚無直接來源對照）'}</a>
       <div className="text-xl font-bold md:text-2xl">
         <QuestionRichText text={question.question || question.questionText || question.stem} alt="題目附圖" />
       </div>

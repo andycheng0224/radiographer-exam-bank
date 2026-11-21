@@ -1,3 +1,4 @@
+import { normalizeSelection, parseAnswerRule, getAnswerRule, acceptsSelection, answerRuleLabel } from './answerRules.js'
 import {
   EXAM_FULL_SCORE,
   EXAM_QUESTION_COUNT,
@@ -7,37 +8,7 @@ import { getQuestionKey } from './storageUtils.js'
 
 export const QUIZ_LENGTH = EXAM_QUESTION_COUNT
 
-export function normalizeAnswer(answer) {
-  if (answer === null || answer === undefined) {
-    return ''
-  }
-
-  if (typeof answer === 'object') {
-    return normalizeAnswer(
-      answer.key ??
-        answer.value ??
-        answer.label ??
-        answer.answer ??
-        answer.correctAnswer ??
-        '',
-    )
-  }
-
-  const normalizedValue = String(answer)
-    .normalize('NFKC')
-    .trim()
-    .replace(/\s+/g, '')
-    .replace(/^選項/i, '')
-    .replace(/[：:．。.、,，]/g, '')
-    .toUpperCase()
-
-  if (!normalizedValue) {
-    return ''
-  }
-
-  const optionMatch = normalizedValue.match(/[A-D]/)
-  return optionMatch ? optionMatch[0] : normalizedValue
-}
+export const normalizeAnswer = normalizeSelection
 
 function getAnswerMapKey(question, index) {
   return getQuestionKey(question) || question?.id || String(index)
@@ -62,19 +33,20 @@ function getStoredUserAnswer(question, userAnswers, index) {
 }
 
 export function calculateExamResult(questions, userAnswers = {}) {
-  const perQuestionScore = EXAM_FULL_SCORE / EXAM_QUESTION_COUNT
   const safeQuestions = Array.isArray(questions) ? questions : []
+  const perQuestionScore = safeQuestions.length ? EXAM_FULL_SCORE / safeQuestions.length : 0
   const safeUserAnswers = userAnswers && typeof userAnswers === 'object' ? userAnswers : {}
 
   const perQuestionResults = safeQuestions.map((question, index) => {
     const questionKey = getAnswerMapKey(question, index)
     const rawUserAnswer = getStoredUserAnswer(question, safeUserAnswers, index)
     const normalizedUserAnswer = normalizeAnswer(rawUserAnswer)
-    const correctAnswer = question?.answer ?? question?.correctAnswer ?? ''
+    const rule = getAnswerRule(question)
+    const correctAnswer = question?.answer ?? question?.correctAnswer ?? answerRuleLabel(question)
     const normalizedCorrectAnswer = String(correctAnswer).trim()
     const isAnswered = normalizedUserAnswer !== ''
-    const isCorrect = isAnswered && isAcceptedAnswer(correctAnswer, normalizedUserAnswer)
-    const status = !isAnswered ? 'unanswered' : isCorrect ? 'correct' : 'wrong'
+    const isCorrect = acceptsSelection(rule, normalizedUserAnswer)
+    const status = isCorrect ? 'correct' : !isAnswered ? 'unanswered' : 'wrong'
 
     return {
       ...question,
@@ -85,6 +57,8 @@ export function calculateExamResult(questions, userAnswers = {}) {
       correctAnswer: normalizedCorrectAnswer || correctAnswer,
       answer: normalizedCorrectAnswer || correctAnswer,
       isAnswered,
+      scoreStatus: rule.kind === 'all-credit' ? 'all-credit' : 'graded',
+      answerRule: rule,
       isCorrect,
       status,
     }
@@ -100,6 +74,8 @@ export function calculateExamResult(questions, userAnswers = {}) {
     totalQuestions === perQuestionResults.length
 
   return {
+    answeredCount: perQuestionResults.filter((q) => q.isAnswered).length,
+    allCreditCount: perQuestionResults.filter((q) => q.scoreStatus === 'all-credit').length,
     totalQuestions,
     totalCount: totalQuestions,
     correctCount,
@@ -149,15 +125,13 @@ export function formatTime(seconds) {
 }
 
 export function getAcceptedAnswers(answer) {
-  const value = String(answer ?? '').normalize('NFKC').trim().toUpperCase()
-  if (value === '送分') return ['A', 'B', 'C', 'D']
-  return [...new Set(value.match(/[A-D]/g) || [])]
+  const rule = parseAnswerRule(answer)
+  return rule.kind === 'all-credit' ? ['A','B','C','D'] : [...new Set(rule.acceptedSets.join('').split(''))]
 }
-export function isAcceptedAnswer(correctAnswer, userAnswer) {
-  return getAcceptedAnswers(correctAnswer).includes(normalizeAnswer(userAnswer))
-}
+export function isAcceptedAnswer(correctAnswer, userAnswer) { return acceptsSelection(parseAnswerRule(correctAnswer), userAnswer) }
 export function getAnswerStatus(question, userAnswer, optionKey) {
-  if (isAcceptedAnswer(question.answer ?? question.correctAnswer, optionKey)) return 'correct'
-  if (userAnswer && optionKey === normalizeAnswer(userAnswer)) return 'wrong'
+  const rule = getAnswerRule(question)
+  if (rule.kind === 'all-credit' || rule.acceptedSets.some(set => set.includes(optionKey))) return 'correct'
+  if (normalizeSelection(userAnswer).includes(optionKey)) return 'wrong'
   return 'default'
 }

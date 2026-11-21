@@ -1,5 +1,8 @@
-import { mkdir, readFile, writeFile, readdir, stat, rm } from 'node:fs/promises'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { browserImageFormat } from './browser-image-format.mjs'
+import { applyContentReview } from '../src/utils/contentReview.js'
+import supplements from '../src/data/verifiedSupplements.js'
+import { mkdir, readFile, writeFile, readdir, stat } from 'node:fs/promises'
+import { readAsset, mapAssets } from './asset-io.mjs'
 import path from 'node:path'
 import { EXAM_SUBJECTS } from '../src/constants/subjects.js'
 import { fileURLToPath } from 'node:url'
@@ -153,7 +156,8 @@ async function ensureDir(dirPath) {
 }
 
 async function main() {
-  const rawQuestions = JSON.parse(await readFile(sourceQuestionsPath, 'utf8'))
+  const sourceQuestions = JSON.parse(await readFile(sourceQuestionsPath, 'utf8'))
+  const rawQuestions = [...sourceQuestions, ...supplements.filter(q=>!sourceQuestions.some(old=>old.id===q.id))]
   if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) throw new Error('Question bank is empty')
   const seenIds = new Set()
   const referencedImages = new Set()
@@ -170,7 +174,7 @@ async function main() {
     seenIds.add(rawQuestion.id)
     if (!rawQuestion.question || !rawQuestion.answer || !['A', 'B', 'C', 'D'].every((key) => typeof rawQuestion.options?.[key] === 'string' && rawQuestion.options[key].trim())) throw new Error(`Invalid question: ${rawQuestion.id}`)
 
-    const normalizedQuestion = normalizeQuestionRecord(rawQuestion)
+    const normalizedQuestion = normalizeQuestionRecord(applyContentReview(rawQuestion))
     const year = Number(normalizedQuestion.year)
     if (!Number.isInteger(year) || year < 100 || year > 115) throw new Error(`Invalid year: ${rawQuestion.id}`)
     for (const match of JSON.stringify(normalizedQuestion).matchAll(/\{\{image:([^}]+)\}\}/g)) referencedImages.add(match[1].split('/').pop())
@@ -240,28 +244,32 @@ async function main() {
     'utf8',
   )
 
+  if (process.argv.includes('--metadata-only')) {
+    console.log(`[build:data] metadata only: ${rawQuestions.length} questions; image sync/validation NOT performed`)
+    return
+  }
+
   // Validate references before replacing any generated assets.
   await Promise.all([...referencedImages].map((name) => stat(path.join(sourceUploadsDir, name))))
   await ensureDir(publicUploadsDir)
   const imageNames = [...referencedImages]
-  for (let offset = 0; offset < imageNames.length; offset += 1) {
-      const name = imageNames[offset]
+  await mapAssets(imageNames, async (name) => {
       const source = path.join(sourceUploadsDir, name)
       const target = path.join(publicUploadsDir, name)
-      const sourceBytes = readFileSync(source)
-      if (!sourceBytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
-        throw new Error(`Expected browser-compatible PNG: ${name}. Normalize source image formats before building.`)
-      }
+      const sourceBytes = await readAsset(source)
+      if (!browserImageFormat(name,sourceBytes)) throw new Error(`Unsupported or incomplete browser image: ${name}; expected PNG or JPEG.`)
       let targetBytes = null
-      try { targetBytes = readFileSync(target) } catch (error) { if (error.code !== 'ENOENT') throw error }
-      if (!targetBytes || !sourceBytes.equals(targetBytes)) {
-        writeFileSync(target, sourceBytes)
+      try { targetBytes = await readAsset(target) } catch (error) {
+        // Only generated copies may be regenerated from the fully read, validated source.
+        if (!['ENOENT','ASSET_SHORT_READ'].includes(error.cause?.code)) throw error
+        if (error.cause?.code === 'ASSET_SHORT_READ') console.warn(`[assets] regenerating short-read generated copy: ${name}`)
       }
-    if (offset % 2048 === 0) console.log(`[build:data] images ${offset + 1}/${imageNames.length}`)
-  }
-  for (const entry of await readdir(publicUploadsDir, { withFileTypes: true })) {
-    if (entry.isFile() && !referencedImages.has(entry.name)) await rm(path.join(publicUploadsDir, entry.name))
-  }
+      if (!targetBytes || !sourceBytes.equals(targetBytes)) {
+        await writeFile(target, sourceBytes)
+      }
+  })
+  const stale = (await readdir(publicUploadsDir, { withFileTypes: true })).filter(entry => entry.isFile() && !referencedImages.has(entry.name))
+  if (stale.length) console.warn(`[build:data] preserved ${stale.length} unreferenced assets; no automatic deletion`)
 
   console.log(`[build:data] wrote ${questionIndex.length} data files to public/data/questions`)
   console.log(`[build:data] question index entries: ${questionIndex.length}`)

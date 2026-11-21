@@ -153,7 +153,7 @@ export function applyWrongReviewResults(perQuestionResults = []) {
     const key = getQuestionKey(item)
     if (!key) continue
     if (item.status !== 'correct') retainedCount += 1
-    if (!item.isAnswered) continue
+    if (!item.isAnswered || item.scoreStatus === 'all-credit') { if (item.status === 'correct') retainedCount += 1; continue }
     const current = statsMap[key] || {}
     const correct = item.status === 'correct'
     const wrongCount = Number(current.wrongCount || 0) + (correct ? 0 : 1)

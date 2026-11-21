@@ -1,0 +1,97 @@
+[
+  {
+    "questionIds": [
+      "115-2-放射線器材學-072",
+      "115-2-放射線器材學（包括磁振學與超音波學）-072"
+    ],
+    "paperKey": "115-2-放射線器材學",
+    "questionNumber": 72,
+    "questionSha256": "005a0ea5962e6defd53b5baaf1b217cc4c69e582d178e82153e7872f27093a65",
+    "questionPages": [
+      15,
+      16
+    ],
+    "version": {
+      "id": "moex-115090-72-放射線器材學-20260827-v1",
+      "authority": "official-correction",
+      "revision": 20260827,
+      "sourceUrl": "https://wwwq.moex.gov.tw/exam/wHandExamQandA_File.ashx?code=115090&t=A",
+      "page": 4,
+      "sourceSha256": "449c08978afa857f5ae21f4e28336693ecd3a0a49f4091226ba301d21cb45a60",
+      "publishedAt": "2026-08-27",
+      "checkedAt": "2026-11-13",
+      "rule": {
+        "kind": "accepted-sets",
+        "acceptedSets": [
+          "A",
+          "B",
+          "D",
+          "AB",
+          "AD",
+          "BD",
+          "ABD"
+        ]
+      }
+    },
+    "answerSha256": "6b3a95ab641de81ac4b2f9995d708fd28f6532b75c795660df05aedced238bc8"
+  },
+  {
+    "questionIds": [
+      "115-2-核子醫學診療原理與技術學-050"
+    ],
+    "paperKey": "115-2-核子醫學診療原理與技術學",
+    "questionNumber": 50,
+    "questionSha256": "540d3a7e522c0fbf93120accc6abea19d4d6513174f111211ed4b849bfa65e22",
+    "questionPages": [
+      10
+    ],
+    "version": {
+      "id": "moex-115090-50-核子醫學診療原理與技術學-20260827-v1",
+      "authority": "official-correction",
+      "revision": 20260827,
+      "sourceUrl": "https://wwwq.moex.gov.tw/exam/wHandExamQandA_File.ashx?code=115090&t=A",
+      "page": 4,
+      "sourceSha256": "449c08978afa857f5ae21f4e28336693ecd3a0a49f4091226ba301d21cb45a60",
+      "publishedAt": "2026-08-27",
+      "checkedAt": "2026-11-13",
+      "rule": {
+        "kind": "accepted-sets",
+        "acceptedSets": [
+          "B",
+          "C"
+        ]
+      }
+    },
+    "answerSha256": "c4639d0fd0e485a62b3afa67cbff7aea3ce3dbc688c10a88cc5552843363ff42"
+  },
+  {
+    "questionIds": [
+      "115-1-放射線診斷原理與技術學-048"
+    ],
+    "paperKey": "115-1-放射線診斷原理與技術學",
+    "questionNumber": 48,
+    "questionSha256": "05d8237a2c297aaad4c6e34066a04b55546c5a15f74e0af25dacbeaf9f0b9b69",
+    "questionPages": [
+      12
+    ],
+    "version": {
+      "id": "moex-115020-20260313-p6-v1",
+      "authority": "official-correction",
+      "revision": 20260313,
+      "sourceUrl": "https://wwwq.moex.gov.tw/exam/wHandExamQandA_File.ashx?code=115020&t=A",
+      "page": 6,
+      "sourceSha256": "5cfa0e61914e11be9c21843568b4b2def7eb7d3feebb4caad4e5b44d3354a32d",
+      "publishedAt": "2026-03-13",
+      "checkedAt": "2026-11-19",
+      "rule": {
+        "kind": "accepted-sets",
+        "acceptedSets": [
+          "A",
+          "B",
+          "AB"
+        ]
+      }
+    },
+    "answerSha256": "e4f4af3726a1bbe0d542dbc7849f64e587b963eb982accf830fd9e88bd16394b"
+  }
+]

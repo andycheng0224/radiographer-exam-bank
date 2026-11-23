@@ -22,7 +22,7 @@ class PreviewPreflightTests(unittest.TestCase):
         self.write("index.html", '<script type="module" src="/assets/app.js"></script>')
         self.write("assets/app.js", "import.meta.url")
         self.write("data/question-index.json", [{"filePath": "/" + self.shard, "questionCount": 1}])
-        self.write("data/question-key-map.json", {"q": "/" + self.shard})
+        self.write("data/question-key-map.json", {"q": "/" + self.shard, "alias-for-q": "/" + self.shard})
 
     def write(self, path, content):
         target = self.output / path
@@ -31,6 +31,7 @@ class PreviewPreflightTests(unittest.TestCase):
 
     def test_browser_image_paths_and_unique_count(self):
         self.write(self.shard, [{
+            "id": "q",
             "question": r"{{image:C:\old\題號.png}} {{image:/uploads/題號.png}}",
             "options": {"A": "{{image:/uploads/sub/answer%20A.png}}"},
             "image": {"src": "/uploads/direct.png"},
@@ -44,7 +45,7 @@ class PreviewPreflightTests(unittest.TestCase):
         self.assertEqual(result["files"], 9)
 
     def test_requires_missing_structured_only_images_and_deduplicates_them(self):
-        self.write(self.shard, [{"images": [
+        self.write(self.shard, [{"id": "q", "images": [
             {"path": "assets/只在欄位.png"}, {"path": "/uploads/只在欄位.png"},
         ]}])
         result = preflight.inspect_preview(self.output)
@@ -55,13 +56,14 @@ class PreviewPreflightTests(unittest.TestCase):
         self.assertTrue(preflight.inspect_preview(self.output)["passed"])
 
     def test_checks_inline_references_outside_the_previous_field_allowlist(self):
-        self.write(self.shard, [{"supplement": [{"text": "{{image:extra.png}}"}]}])
+        self.write(self.shard, [{"id": "q", "supplement": [{"text": "{{image:extra.png}}"}]}])
         result = preflight.inspect_preview(self.output)
         self.assertFalse(result["passed"])
         self.assertEqual(result["examples"]["referenced-image-missing"], ["uploads/extra.png"])
 
     def test_rejects_missing_and_nonlocal_images_empty_file_and_oversize(self):
         self.write(self.shard, [{
+            "id": "q",
             "question": "{{image:missing.png}} {{image:https://example.invalid/a.png}}",
             "image": "/uploads/empty.png",
         }])
@@ -77,7 +79,7 @@ class PreviewPreflightTests(unittest.TestCase):
         self.assertEqual(result["issues"]["image-nonlocal"], 1)
 
     def test_dataless_shard_is_not_opened(self):
-        self.write(self.shard, [{"question": "placeholder"}])
+        self.write(self.shard, [{"id": "q", "question": "placeholder"}])
         placeholder = self.output / self.shard
         original_stat, original_read = Path.lstat, Path.read_bytes
 
@@ -104,6 +106,37 @@ class PreviewPreflightTests(unittest.TestCase):
         self.assertEqual(result["unavailableShards"], [self.shard])
         self.assertEqual(result["inspectedQuestions"], 0)
         self.assertEqual(result["issues"]["catalog-missing"], 1)
+
+
+    def test_missing_exact_question_key_fails_even_if_alias_is_valid(self):
+        self.write(self.shard, [{"id": "q"}])
+        self.write("data/question-key-map.json", {"alias-for-q": "/" + self.shard})
+        result = preflight.inspect_preview(self.output)
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["examples"]["catalog-missing-question-key"], ["q"])
+
+    def test_wrong_but_indexed_key_target_fails(self):
+        other_shard = "data/questions/basic/114.json"
+        self.write("data/question-index.json", [
+            {"filePath": "/" + self.shard, "questionCount": 1},
+            {"filePath": "/" + other_shard, "questionCount": 1},
+        ])
+        self.write(self.shard, [{"id": "q"}])
+        self.write(other_shard, [{"id": "q2"}])
+        self.write("data/question-key-map.json", {"q": "/" + other_shard, "q2": "/" + other_shard})
+        result = preflight.inspect_preview(self.output)
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["examples"]["catalog-wrong-question-key-target"], ["q"])
+
+    def test_duplicate_and_missing_question_ids_fail(self):
+        self.write("data/question-index.json", [
+            {"filePath": "/" + self.shard, "questionCount": 3},
+        ])
+        self.write(self.shard, [{"id": "q"}, {"id": "q"}, {"question": "no ID"}])
+        result = preflight.inspect_preview(self.output)
+        self.assertFalse(result["passed"])
+        self.assertEqual(result["examples"]["catalog-duplicate-question-id"], ["q"])
+        self.assertEqual(result["examples"]["catalog-invalid-question-id"], [self.shard])
 
 
 if __name__ == "__main__":

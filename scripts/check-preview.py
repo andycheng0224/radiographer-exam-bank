@@ -150,6 +150,7 @@ def inspect_preview(root):
         issue("catalog-invalid-key-map", "data/question-key-map.json")
 
     shards, images, unavailable_shards = set(), set(), set()
+    question_locations = {}
     inspected_count = 0
     for record in index if isinstance(index, list) else []:
         try:
@@ -173,6 +174,13 @@ def inspect_preview(root):
                 issue("catalog-invalid-question", shard)
                 continue
             inspected_count += 1
+            question_id = question.get("id")
+            if not isinstance(question_id, str) or not question_id.strip():
+                issue("catalog-invalid-question-id", shard)
+            elif question_id in question_locations:
+                issue("catalog-duplicate-question-id", question_id)
+            else:
+                question_locations[question_id] = shard
             for raw in image_refs(question):
                 if not isinstance(raw, str):
                     issue("image-invalid-path", shard)
@@ -193,14 +201,27 @@ def inspect_preview(root):
                 except ValueError:
                     issue("image-invalid-path", normalized)
     if isinstance(key_map, dict):
-        for url in {value for value in key_map.values() if isinstance(value, str)}:
+        indexed_targets = {}
+        for url in sorted({value for value in key_map.values() if isinstance(value, str)}):
             try:
-                if local_url(url) not in shards:
+                target = local_url(url)
+                if target not in shards:
                     raise ValueError("Not indexed")
+                indexed_targets[url] = target
             except ValueError:
                 issue("catalog-unindexed-key-target", url)
         if any(not isinstance(value, str) for value in key_map.values()):
             issue("catalog-invalid-key-target", "data/question-key-map.json")
+
+        # The generator writes both the exact ID and compatibility aliases. Only
+        # exact IDs have an unambiguous expected shard, so leave aliases intact.
+        for question_id, shard in question_locations.items():
+            if question_id not in key_map:
+                issue("catalog-missing-question-key", question_id)
+                continue
+            url = key_map[question_id]
+            if isinstance(url, str) and url in indexed_targets and indexed_targets[url] != shard:
+                issue("catalog-wrong-question-key-target", question_id)
     for image in sorted(images):
         available(image, "referenced-image")
 
